@@ -1,4 +1,5 @@
 use uuid::Uuid;
+use std::fmt;
 
 pub type SessionId = Uuid;// a random unique ID for each socks5 connection
 pub type Sequence = u32;// keep the order of chunks, seperated for upstream and downstream 

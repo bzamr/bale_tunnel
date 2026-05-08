@@ -1,4 +1,3 @@
-use std::fmt;
 use thiserror::Error; 
 //use serde::{Serialize, Deserialize};
 use crate::types::{SessionId, Sequence, FileType };
