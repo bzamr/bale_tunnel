@@ -4,8 +4,11 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration, timeout};
 use tracing::{debug, error, info, trace, warn};  
 use reqwest::Url;
+use std::net::SocketAddr;
 
 mod config;
+mod socks5_server; 
+
 use config::Config;
 
 // =================== Bale API Response Data Structures ==================
@@ -49,13 +52,43 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting Bale Tunnel Client (polling-only mode)");
+    info!("Starting Bale Tunnel Client (basic SOCKS5 + polling)");
 
     // Load configuration from environment (BALE_BOT_TOKEN, etc.)
     let config = Config::from_env().context("Failed to load config from environment")?;
-    info!("Using SOCKS5 listen address: {}", config.socks5_listen_addr);
-    info!("Polling timeout: {} seconds", config.polling_timeout_seconds);
+    let socks5_addr: SocketAddr = config
+        .socks5_listen_addr
+        .parse()
+        .context("Invalid SOCKS5 listen address")?;
 
+     // task1: socks5 server (defined at client/src/socks5_server.rs)
+    let socks5_task = tokio::spawn(async move {
+        if let Err(e) = socks5_server::run_socks5_server(socks5_addr).await {
+            error!("SOCKS5 server terminated: {}", e);
+        }
+    });
+
+    // task2: long polling 
+    let polling_task = tokio::spawn(async move {
+        if let Err(e) = run_polling(config).await {
+            error!("Polling task terminated: {}", e);
+        }
+    });
+
+    // waiting for terminate signal (Ctrl+C)
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install Ctrl+C handler");
+    info!("Shutdown signal received, exiting gracefully...");
+
+    // Abort both tasks (optional, but good practice)
+    socks5_task.abort();
+    polling_task.abort();
+
+    Ok(())
+}
+
+async fn run_polling(config: Config) -> Result<()>{
     // Create an HTTP client with a global timeout, 10 sec longer than the long polling timeout.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
@@ -80,7 +113,7 @@ async fn main() -> Result<()> {
                 ("timeout", config.polling_timeout_seconds.to_string()),
             ],
         ).context("Failed to construct URL with params")?;
-        debug!("url_with_params: {}",url_with_params);
+        trace!("url_with_params: {}",url_with_params);
         info!("Polling updates with offset={}", offset);
 
         let request_future = client.get(url_with_params).send();
