@@ -1527,6 +1527,7 @@ dependencies = [
  "axum",
  "bytes",
  "dotenvy",
+ "envy",
  "futures",
  "reqwest",
  "serde",
