@@ -4,10 +4,12 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration, timeout};
 use tracing::{debug, error, info, warn};
 use reqwest::Url;
-use reqwest::multipart::{Form, Part};
 
 mod config;
+mod session_manager;
 use config::Config;
+use session_manager::SessionManager;
+
 
 // ---------- Bale API response structures ----------
 #[derive(Debug, serde::Deserialize)]
@@ -27,7 +29,7 @@ struct Message {
     document: Option<Document>,
      chat:Chat,
 }
-// A chat within an update (simplified )
+// A chat within a message (simplified )
 #[derive(Debug, serde::Deserialize)]
 struct Chat {
     id:i64,   // channel chatId used for communication 
@@ -40,9 +42,8 @@ struct Document {
 }
 
 // ---------- Polling task ----------
-async fn run_polling(config: Config) -> Result<()> {
+async fn run_polling(config: Config, session_mgr: SessionManager) -> Result<()> {
     info!("Starting server polling loop (receiving tunnel chunks from client)");
-
     // Create an HTTP client with a global timeout, 10 sec longer than the long polling timeout.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
@@ -110,7 +111,6 @@ async fn run_polling(config: Config) -> Result<()> {
             let update_id = update.update_id;
             last_update_id.store(update_id, Ordering::SeqCst);
             //check of its a communication message through channel
-           
             if let Some(msg) = &update.message {
                 if msg.chat.id != expected_chat_id{
                 warn!("Receive update from unrelevant chat, ignoring.");
@@ -127,21 +127,10 @@ async fn run_polling(config: Config) -> Result<()> {
                     if let Ok((file_type, session_id, _seq)) = shared::parse_filename(file_name) {
                         match file_type {
                             shared::FileType::Conn => {
-                                // download conn file 
-                                match download_file(&client, &config, &doc.file_id).await {
-                                    Ok(content) => {
-                                        let content_str = String::from_utf8_lossy(&content).to_string();
-                                        //todo: for now, just log contetn and send ack file,should have server session manager
-                                        info!("Client requested connection to: {}",content_str);
-                                        let file_name=shared::ack_filename(session_id);
-                                        let ack_data=String::from("OK");
-                                        send_document(&config, &client, &file_name, ack_data.as_bytes())
-                                        .await
-                                        .context("Failed to send ack_ file")?;
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to download conn file for session {}: {}", session_id, e);
-                                    }
+                                let session_mngr_clone=session_mgr.clone();
+                                let file_id_clone = doc.file_id.clone();
+                                if let Err(e) = session_mngr_clone.handle_conn_file(session_id, &file_id_clone).await {
+                                    error!("Failed to handle conn for {}: {}", session_id, e);
                                 }
                             }
                             shared::FileType::Upstream => {
@@ -159,7 +148,6 @@ async fn run_polling(config: Config) -> Result<()> {
                     } else {
                         debug!("Unknown file format: {}", file_name);
                     }
-                    // TODO: download file and process tunnel packets (conn_, u_, end_)
                 } else {
                     debug!("Server: message has no document, ignoring");
                 }
@@ -173,62 +161,6 @@ async fn run_polling(config: Config) -> Result<()> {
         }
     }
 }
-//Download file from bale server by fileID
-async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str) -> Result<Vec<u8>> {
-    // Step1: get filePath by getFile method 
-    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_server_bot_token);
-    let resp: serde_json::Value = client
-        .post(&get_file_url)
-        .json(&serde_json::json!({ "file_id": file_id }))
-        .send()
-        .await
-        .context("Failed to call getFile")?
-        .json()
-        .await
-        .context("Failed to parse getFile response")?;
-    //reminder: filePath is valid upto 1hour. 
-    let file_path = resp["result"]["file_path"]
-        .as_str()
-        .context("Missing file_path in response")?;
-    //Step2: download file by filePath     
-    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_server_bot_token, file_path);
-    let file_data = client
-        .get(&file_url)
-        .send()
-        .await
-        .context("Failed to download file")?
-        .bytes()
-        .await
-        .context("Failed to read file bytes")?;
-    
-    Ok(file_data.to_vec())
-}
-
-
-async fn send_document( config: &Config,client: &reqwest::Client, filename: &str, data: &[u8]) -> Result<()> {
-    let url = format!("{}/bot{}/sendDocument", config.bale_api_base_url, config.bale_server_bot_token);
-    // Build multipart form with the document part.
-    let part = Part::bytes(data.to_vec())//data.to_vec copies data to heap,ok for small data.
-        .file_name(filename.to_string())
-        .mime_str("application/octet-stream")?;
-    let form = Form::new()
-        .text("chat_id", config.bale_chat_id.to_string())
-        .part("document", part);
-    
-    let response = client
-        .post(&url)
-        .multipart(form)
-        .send()
-        .await
-        .context("Failed to send document")?;
-    // Treat any non‑2xx status as error.
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        anyhow::bail!("sendDocument failed: {} - {}", status, text);
-    }
-    Ok(())
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -239,13 +171,16 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting Bale Tunnel Server (polling-only mode)");
+    info!("Starting Bale Tunnel Server with SessionManager");
 
     let config = Config::from_env().context("Failed to load server config from environment")?;
-
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
+        .build()?;
+    let session_mgr = SessionManager::new(client, config.clone());
     // Run polling in a separate task 
     let polling_task = tokio::spawn(async move {
-        if let Err(e) = run_polling(config).await {
+        if let Err(e) = run_polling(config,session_mgr).await {
             error!("Polling task terminated with error: {}", e);
         }
     });

@@ -52,7 +52,17 @@ async fn handle_socks5_connection(stream: TcpStream, peer_addr: SocketAddr, sess
             if let Err(e) = session_mgr.request_connection(&host, port, 30).await {
                 // error: timeout or invalid ack, notify client
                 warn!("Failed to establish tunnel: {}", e);
-                protocol.reply_error(&fast_socks5::ReplyError::ConnectionRefused).await?;
+                let err_msg=format!("{}",e);
+                let reply=if err_msg.contains("refused") {
+                    fast_socks5::ReplyError::ConnectionRefused
+                } else if err_msg.contains("timeout") {
+                    fast_socks5::ReplyError::ConnectionTimeout
+                } else if err_msg.contains("Unreachable") {
+                    fast_socks5::ReplyError::HostUnreachable
+                }else {
+                    fast_socks5::ReplyError::GeneralFailure
+                };
+                protocol.reply_error(&reply).await?;
                 return Ok(());
             }
             
