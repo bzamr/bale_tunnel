@@ -6,7 +6,7 @@ use serde::Deserialize;
 pub struct Config {
     // Bale bot token obtained from @BotFather.
     // Mandatory field; causes an error if missing.
-    pub bale_bot_token: String,
+    pub bale_client_bot_token: String,
 
     // DemirBot channel -for bot sending file 
     pub bale_chat_id: i64,
@@ -59,7 +59,7 @@ impl Config {
     pub fn get_updates_url(&self) -> String {
         format!(
             "{}/bot{}/getUpdates",
-            self.bale_api_base_url, self.bale_bot_token
+            self.bale_api_base_url, self.bale_client_bot_token
         )
     }
 }

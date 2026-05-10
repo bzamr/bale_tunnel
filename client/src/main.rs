@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
         .build()
         .context("Failed to create HTTP client")?;
-    let session=SessionManager::new(client.clone(),config.bale_bot_token.clone(),config.bale_chat_id.to_string() ,config.bale_api_base_url.clone());
+    let session=SessionManager::new(client.clone(),config.bale_client_bot_token.clone(),config.bale_chat_id.to_string() ,config.bale_api_base_url.clone());
     let session_clone=session.clone();
     // task1: socks5 server (defined at client/src/socks5_server.rs)
     let socks5_task = tokio::spawn(async move {
@@ -239,7 +239,7 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
 //Download file from bale server by fileID
 async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str) -> Result<Vec<u8>> {
     // Step1: get filePath by getFile method 
-    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_bot_token);
+    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_client_bot_token);
     let resp: serde_json::Value = client
         .post(&get_file_url)
         .json(&serde_json::json!({ "file_id": file_id }))
@@ -254,7 +254,7 @@ async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str)
         .as_str()
         .context("Missing file_path in response")?;
     //Step2: download file by filePath     
-    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_bot_token, file_path);
+    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_client_bot_token, file_path);
     let file_data = client
         .get(&file_url)
         .send()

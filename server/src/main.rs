@@ -134,7 +134,7 @@ async fn run_polling(config: Config) -> Result<()> {
                                         //todo: for now, just log contetn and send ack file,should have server session manager
                                         info!("Client requested connection to: {}",content_str);
                                         let file_name=shared::ack_filename(session_id);
-                                        let ack_data=String::from("Ok");
+                                        let ack_data=String::from("OK");
                                         send_document(&config, &client, &file_name, ack_data.as_bytes())
                                         .await
                                         .context("Failed to send ack_ file")?;
@@ -176,7 +176,7 @@ async fn run_polling(config: Config) -> Result<()> {
 //Download file from bale server by fileID
 async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str) -> Result<Vec<u8>> {
     // Step1: get filePath by getFile method 
-    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_bot_token);
+    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_server_bot_token);
     let resp: serde_json::Value = client
         .post(&get_file_url)
         .json(&serde_json::json!({ "file_id": file_id }))
@@ -191,7 +191,7 @@ async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str)
         .as_str()
         .context("Missing file_path in response")?;
     //Step2: download file by filePath     
-    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_bot_token, file_path);
+    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_server_bot_token, file_path);
     let file_data = client
         .get(&file_url)
         .send()
@@ -206,7 +206,7 @@ async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str)
 
 
 async fn send_document( config: &Config,client: &reqwest::Client, filename: &str, data: &[u8]) -> Result<()> {
-    let url = format!("{}/bot{}/sendDocument", config.bale_api_base_url, config.bale_bot_token);
+    let url = format!("{}/bot{}/sendDocument", config.bale_api_base_url, config.bale_server_bot_token);
     // Build multipart form with the document part.
     let part = Part::bytes(data.to_vec())//data.to_vec copies data to heap,ok for small data.
         .file_name(filename.to_string())
