@@ -3,13 +3,16 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration, timeout};
 use tracing::{debug, error, info, trace, warn};  
-use reqwest::Url;
+use reqwest::{Client, Url};
 use std::net::SocketAddr;
 
 mod config;
 mod socks5_server; 
+mod session_manager;
 
 use config::Config;
+
+use crate::session_manager::SessionManager;
 
 // =================== Bale API Response Data Structures ==================
 
@@ -31,7 +34,14 @@ struct Update {
 #[derive(Debug, serde::Deserialize)]
 struct Message {
     document: Option<Document>,   // Optional document (file) attachment
+    chat:Chat,
 }
+// A chat within an update (simplified )
+#[derive(Debug, serde::Deserialize)]
+struct Chat {
+    id:i64,   // channel chatId used for communication 
+}
+
 
 // A document (file) attached to a message
 #[derive(Debug, serde::Deserialize)]
@@ -60,17 +70,23 @@ async fn main() -> Result<()> {
         .socks5_listen_addr
         .parse()
         .context("Invalid SOCKS5 listen address")?;
-
-     // task1: socks5 server (defined at client/src/socks5_server.rs)
+     // Create an HTTP client with a global timeout, 10 sec longer than the long polling timeout.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
+        .build()
+        .context("Failed to create HTTP client")?;
+    let session=SessionManager::new(client.clone(),config.bale_bot_token.clone(),config.bale_chat_id.to_string() ,config.bale_api_base_url.clone());
+    let session_clone=session.clone();
+    // task1: socks5 server (defined at client/src/socks5_server.rs)
     let socks5_task = tokio::spawn(async move {
-        if let Err(e) = socks5_server::run_socks5_server(socks5_addr).await {
+        if let Err(e) = socks5_server::run_socks5_server(socks5_addr,session).await {
             error!("SOCKS5 server terminated: {}", e);
         }
     });
 
     // task2: long polling 
     let polling_task = tokio::spawn(async move {
-        if let Err(e) = run_polling(config).await {
+        if let Err(e) = run_polling(config,client,session_clone).await {
             error!("Polling task terminated: {}", e);
         }
     });
@@ -88,12 +104,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_polling(config: Config) -> Result<()>{
-    // Create an HTTP client with a global timeout, 10 sec longer than the long polling timeout.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
-        .build()
-        .context("Failed to create HTTP client")?;
+async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -> Result<()>{
 
     // Shared atomic counter to track the last processed update_id across loops.
     let last_update_id = Arc::new(AtomicI64::new(0));
@@ -157,14 +168,20 @@ async fn run_polling(config: Config) -> Result<()>{
             sleep(Duration::from_secs(1)).await;
             continue;
         }
-
+        // to check if received update is from communication channel
+        let expected_chat_id=config.bale_chat_id;
         // Process each received update.
         for update in &updates.result {
             let update_id = update.update_id;
             // Always advance the offset to this update_id (even if we ignore it)
             last_update_id.store(update_id, Ordering::SeqCst);
-
+            //check of its a communication message through channel
+            
             if let Some(msg) = &update.message {
+                if msg.chat.id != expected_chat_id{
+                warn!("Receive update from unrelevant chat, ignoring.");
+                continue;
+                }
                 if let Some(doc) = &msg.document {
                     // log  document (file) metadata.
                     // todo: download the file using getFile and process it as a tunnel chunk.
@@ -173,6 +190,37 @@ async fn run_polling(config: Config) -> Result<()>{
                         "📎 Received document: file_id={}, file_name={}",
                         doc.file_id, file_name
                     );
+                    // extract fileType and sessionID from fileName
+                    if let Ok((file_type, session_id, _seq)) = shared::parse_filename(file_name) {
+                        match file_type {
+                            shared::FileType::Ack => {
+                                // download ack file 
+                                match download_file(&client, &config, &doc.file_id).await {
+                                    Ok(content) => {
+                                        let content_str = String::from_utf8_lossy(&content).to_string();
+                                        session_mgr.notify_ack(session_id, content_str).await;
+                                        info!("Processed ack for session {}", session_id);
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to download ack file for session {}: {}", session_id, e);
+                                    }
+                                }
+                            }
+                            shared::FileType::Downstream => {
+                                //todo use for tunnel 
+                                debug!("Received data chunk: {:?}", file_type);
+                            }
+                            shared::FileType::End => {
+                                info!("Received end signal for session {}", session_id);
+                                // todo: close connection.
+                            }
+                            _=>{ 
+                                warn!("Received unValid file type for session {}", session_id);
+                            }
+                        }
+                    } else {
+                        debug!("Unknown file format: {}", file_name);
+                    }
                 } else {
                     debug!("Message received but doesn't have document, ignoring");
                 }
@@ -186,4 +234,35 @@ async fn run_polling(config: Config) -> Result<()>{
             sleep(Duration::from_millis(100)).await;
         }
     }
+}
+
+//Download file from bale server by fileID
+async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str) -> Result<Vec<u8>> {
+    // Step1: get filePath by getFile method 
+    let get_file_url = format!("{}/bot{}/getFile", config.bale_api_base_url, config.bale_bot_token);
+    let resp: serde_json::Value = client
+        .post(&get_file_url)
+        .json(&serde_json::json!({ "file_id": file_id }))
+        .send()
+        .await
+        .context("Failed to call getFile")?
+        .json()
+        .await
+        .context("Failed to parse getFile response")?;
+    //reminder: filePath is valid upto 1hour. 
+    let file_path = resp["result"]["file_path"]
+        .as_str()
+        .context("Missing file_path in response")?;
+    //Step2: download file by filePath     
+    let file_url = format!("{}/file/bot{}/{}", config.bale_api_base_url, config.bale_bot_token, file_path);
+    let file_data = client
+        .get(&file_url)
+        .send()
+        .await
+        .context("Failed to download file")?
+        .bytes()
+        .await
+        .context("Failed to read file bytes")?;
+    
+    Ok(file_data.to_vec())
 }

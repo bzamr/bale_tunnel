@@ -8,6 +8,9 @@ pub struct Config {
     // Mandatory field; causes an error if missing.
     pub bale_bot_token: String,
 
+    // DemirBot channel -for bot sending file 
+    pub bale_chat_id: i64,
+
     // Base URL for the Bale Bot API.
     // Optional; defaults to "https://tapi.bale.ai".
     #[serde(default = "default_api_base_url")]

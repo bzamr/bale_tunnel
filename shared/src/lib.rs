@@ -44,3 +44,4 @@ mod tests {
         assert_eq!(parse_filename(&end), Ok((FileType::End, id, None)));
     }
 }
+
