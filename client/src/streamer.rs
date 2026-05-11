@@ -12,7 +12,7 @@ use shared::SessionId;
 // The stream is expected to be the read half of a split TcpStream.
 pub async fn run_upstream_sender(
     session_id: SessionId,
-    mut stream: TcpStream,  // read half from split
+    mut stream: tokio::io::ReadHalf<TcpStream>,  // read half from split
     session_mgr: SessionManager,
 ) -> Result<()> {
     // Use a 1 MiB buffer to match the maximum chunk size allowed by the protocol.
@@ -41,7 +41,7 @@ pub async fn run_upstream_sender(
 // Reordering uses a BTreeMap to buffer chunks that arrive out of order.
 pub async fn run_downstream_receiver(
     session_id: SessionId,
-    mut stream: TcpStream,  // write half from split
+    mut stream: tokio::io::WriteHalf<TcpStream>,  // write half from split
     mut rx: UnboundedReceiver<(u32, Vec<u8>)>,
 ) -> Result<()> {
     // Buffer for out‑of‑order chsunk (seq -> data)
