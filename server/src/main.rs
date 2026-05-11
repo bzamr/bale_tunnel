@@ -129,9 +129,11 @@ async fn run_polling(config: Config, session_mgr: SessionManager) -> Result<()> 
                             shared::FileType::Conn => {
                                 let session_mngr_clone=session_mgr.clone();
                                 let file_id_clone = doc.file_id.clone();
-                                if let Err(e) = session_mngr_clone.handle_conn_file(session_id, &file_id_clone).await {
+                                tokio::spawn(async move{
+                                    if let Err(e) = session_mngr_clone.handle_conn_file(session_id, &file_id_clone).await {
                                     error!("Failed to handle conn for {}: {}", session_id, e);
                                 }
+                                });
                             }
                             shared::FileType::Upstream => {
                                 //todo use for tunnel 
