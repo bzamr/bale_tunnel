@@ -81,20 +81,23 @@ async fn handle_socks5_connection(stream: TcpStream, peer_addr: SocketAddr, sess
                     
             // Register a downstream channel for this session and obtain the receiving end.
             // The receiving end will be used to get (seq, data) pairs from the polling loop.
-            let downstream_rx = session_mgr.register_downstream(session_id).await;
-                    
+           let (downstream_rx, cancel_token) =
+                session_mgr.register_downstream(session_id).await;       
             let mgr_clone = session_mgr.clone();
-                    
+            let cancel_token_clone = cancel_token.clone();
+        
             // Spawn a task to read from the SOCKS5 socket and send upstream chunks (content of u_ files).
             let _upstream_task = tokio::spawn(async move {
-                if let Err(e) = streamer::run_upstream_sender(session_id, read_half, mgr_clone).await {
+                if let Err(e) = streamer::
+                        run_upstream_sender(session_id, read_half, mgr_clone, cancel_token_clone).await {
                     error!("Upstream task error: {}", e);
                 }
             });
             
             // Spawn a task to receive downstream chunks (content of d_ files) and write them to the SOCKS5 socket.
             let _downstream_task = tokio::spawn(async move {
-                if let Err(e) = streamer::run_downstream_receiver(session_id, write_half, downstream_rx).await {
+                if let Err(e) = streamer::
+                    run_downstream_receiver(session_id, write_half, downstream_rx,cancel_token).await {
                     error!("Downstream task error: {}", e);
                 }
             });

@@ -7,9 +7,10 @@ use tracing::{debug,info,warn};
 use reqwest::multipart::{Form, Part};
 use reqwest::Client;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender, UnboundedReceiver};
-use std::collections::BTreeMap;// buffer out of order chunks
-use shared::{upstream_filename, downstream_filename, end_filename};
+//use std::collections::BTreeMap;// buffer out of order chunks
+use shared::{upstream_filename, end_filename};
 use shared::{conn_filename, SessionId};
+use tokio_util::sync::CancellationToken;
 
 // Manages sessions and coordinates between SOCKS5-server and polling-loop.
 #[derive(Clone)]
@@ -30,6 +31,8 @@ pub struct SessionManager {
     // Map of session IDs to the next upstream sequence number (starts at 0).
     // Used to generate sequential filenames for upstream chunks (u_<sess_id>_<seq>.bin).
     upstream_seq: Arc<Mutex<HashMap<SessionId, u32>>>,
+    // use for handle end file 
+    cancellation_tokens: Arc<Mutex<HashMap<SessionId, CancellationToken>>>,
 }
 
 impl SessionManager {
@@ -42,6 +45,7 @@ impl SessionManager {
             pending_acks: Arc::new(Mutex::new(HashMap::new())),
             downstream_senders: Arc::new(Mutex::new(HashMap::new())),
             upstream_seq: Arc::new(Mutex::new(HashMap::new())),
+            cancellation_tokens:  Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -101,11 +105,18 @@ impl SessionManager {
     // Registers a downstream channel for the given session.
     // Returns the receiving end of an unbounded channel that will deliver (seq, data) pairs.
     // The sender side is stored in downstream_senders and used by on_downstream_chunk.
-    pub async fn register_downstream(&self, session_id: SessionId) -> UnboundedReceiver<(u32, Vec<u8>)> {
-        let (tx, rx) = unbounded_channel();
-        let mut senders = self.downstream_senders.lock().await;
-        senders.insert(session_id, tx);
-        rx
+    pub async fn register_downstream(&self, session_id: SessionId)
+    ->  (UnboundedReceiver<(u32, Vec<u8>)>, CancellationToken) 
+    {
+        let (tx_data, rx_data) = unbounded_channel();
+        let token = CancellationToken::new();
+        {
+            let mut senders = self.downstream_senders.lock().await;
+            senders.insert(session_id, tx_data);
+            let mut tokens = self.cancellation_tokens.lock().await;
+            tokens.insert(session_id, token.clone());
+        }
+        (rx_data, token)
     }
 
     // Sends one upstream data chunk (u_<id>_<seq>.bin) to the bot.
@@ -182,5 +193,16 @@ impl SessionManager {
         } else {
             info!("Received ack for unknown session {}", session_id);
         }
+    }
+
+    // Called by the polling loop when an end_<session_id>.bin file is received.
+    pub async fn cancel_session(&self, session_id: SessionId) {
+        let mut tokens = self.cancellation_tokens.lock().await;
+        if let Some(token) = tokens.remove(&session_id) {
+            token.cancel();
+        }
+        // remove other resources
+        let mut senders = self.downstream_senders.lock().await;
+        senders.remove(&session_id);
     }
 }

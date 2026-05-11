@@ -232,7 +232,7 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
                             }
                             shared::FileType::End => {
                                 info!("End signal received for session {}, closing...", session_id);
-                                // todo: close connection.
+                                session_mgr.cancel_session(session_id).await;
                             }
                             _=>{ 
                                 warn!("Received unValid file type for session {}", session_id);
