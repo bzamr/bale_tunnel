@@ -191,7 +191,7 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
                         doc.file_id, file_name
                     );
                     // extract fileType and sessionID from fileName
-                    if let Ok((file_type, session_id, _seq)) = shared::parse_filename(file_name) {
+                    if let Ok((file_type, session_id, seq)) = shared::parse_filename(file_name) {
                         match file_type {
                             shared::FileType::Ack => {
                                 // download ack file 
@@ -207,11 +207,31 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
                                 }
                             }
                             shared::FileType::Downstream => {
-                                //todo use for tunnel 
                                 debug!("Received data chunk: {:?}", file_type);
+                                if let Some(seq_num) = seq { //seq option come from parse name
+                                    let client_clone=client.clone();
+                                    let config_clone=config.clone();
+                                    let file_id_clone=doc.file_id.clone();
+                                    let session_mngr_clone=session_mgr.clone();
+                                    let _=tokio::spawn(async move{
+                                        match download_file(&client_clone, &config_clone, &file_id_clone).await {
+                                            Ok(content)=>{
+                                                session_mngr_clone
+                                                .on_downstream_chunk(session_id, seq_num, content).await;
+                                                // on_downstream_chunk will send data to steamer via Unbound_channel
+                                            }
+                                            Err(e)=>{
+                                                error!("Failed to download downstream file for session {}: {}",
+                                                        session_id, e);
+                                            }
+                                        } 
+                                    });
+                                }else {
+                                    error!("Missing sequence number for downstream file");
+                                }                       
                             }
                             shared::FileType::End => {
-                                info!("Received end signal for session {}", session_id);
+                                info!("End signal received for session {}, closing...", session_id);
                                 // todo: close connection.
                             }
                             _=>{ 
