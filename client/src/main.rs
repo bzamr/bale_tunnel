@@ -33,6 +33,7 @@ struct Update {
 // A message within an update (simplified )
 #[derive(Debug, serde::Deserialize)]
 struct Message {
+    message_id: i64,
     document: Option<Document>,   // Optional document (file) attachment
     chat:Chat,
 }
@@ -106,6 +107,9 @@ async fn main() -> Result<()> {
 
 async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -> Result<()>{
 
+    // delete old messages
+    cleanup_old_updates(&client, &config, config.bale_chat_id).await?;
+
     // Shared atomic counter to track the last processed update_id across loops.
     let last_update_id = Arc::new(AtomicI64::new(0));
     let get_updates_url = config.get_updates_url();
@@ -170,14 +174,19 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
         }
         // to check if received update is from communication channel
         let expected_chat_id=config.bale_chat_id;
+        // Short sleep  to avoid busy-waiting and reduce CPU usage.
+        if updates.result.is_empty() {
+            sleep(Duration::from_millis(100)).await;
+            continue;
+        }
         // Process each received update.
-        for update in &updates.result {
+        for update in updates.result {
             let update_id = update.update_id;
             // Always advance the offset to this update_id (even if we ignore it)
             last_update_id.store(update_id, Ordering::SeqCst);
             //check of its a communication message through channel
             
-            if let Some(msg) = &update.message {
+            if let Some(msg) = update.message {
                 if msg.chat.id != expected_chat_id{
                 warn!("Receive update from unrelevant chat, ignoring.");
                 continue;
@@ -244,14 +253,23 @@ async fn run_polling(config: Config,client:Client,session_mgr: SessionManager) -
                 } else {
                     debug!("Message received but doesn't have document, ignoring");
                 }
-            } else {
-                debug!("Update {} has no message", update_id);
-            }
-        }
+                let client_clone=client.clone();
+                let config_clone=config.clone();
+                tokio::spawn(async move{
+                if let Err(e) = delete_message(
+                &client_clone,
+                config_clone,
+                msg.message_id,
+                ).await {
+                error!("Failed to delete message {}: {}", msg.message_id, e);
+                } else {
+                   debug!("Deleted message {}", msg.message_id);
+                }
+                });
 
-        // Short sleep  to avoid busy-waiting and reduce CPU usage.
-        if updates.result.is_empty() {
-            sleep(Duration::from_millis(100)).await;
+                } else {
+                    debug!("Update {} has no message", update_id);
+                }
         }
     }
 }
@@ -285,4 +303,57 @@ async fn download_file(client: &reqwest::Client, config: &Config, file_id: &str)
         .context("Failed to read file bytes")?;
     
     Ok(file_data.to_vec())
+}
+// call bale api deleteMessage method with messageID, chatID
+async fn delete_message(
+    client: &reqwest::Client,
+    config:Config,
+    message_id: i64,
+) -> Result<()> {
+    let url = format!("{}/bot{}/deleteMessage", config.bale_api_base_url, config.bale_client_bot_token);
+    let response = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": config.bale_chat_id,
+            "message_id": message_id
+        }))
+        .send()
+        .await
+        .context("Failed to call deleteMessage")?;
+    if !response.status().is_success() {
+        let text = response.text().await.unwrap_or_default();
+        anyhow::bail!("deleteMessage failed: {}", text);
+    }
+    Ok(())
+}
+async fn cleanup_old_updates(
+    client: &reqwest::Client,
+    config: &Config,
+    expected_chat_id: i64,
+) -> Result<()> {
+    let url = config.get_updates_url();
+    let resp = client
+        .get(&url)
+        .json(&serde_json::json!({"offset": "0","timeout":"0"}))    //previous updates
+        .send()
+        .await
+        .context("Failed to fetch updates for cleanup")?;
+    let updates: GetUpdatesResponse = resp.json().await?;
+    for update in updates.result {
+        if let Some(msg) = update.message {
+            if msg.chat.id == expected_chat_id {
+                let client_clone=client.clone();
+                let config_clone=config.clone();
+                tokio::spawn(async move{
+                    let _ = delete_message(
+                    &client_clone,
+                    config_clone,
+                    msg.chat.id,
+                )
+                .await;
+                });
+            };
+        }
+    }
+    Ok(())
 }
