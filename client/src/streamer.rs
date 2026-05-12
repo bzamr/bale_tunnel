@@ -39,6 +39,7 @@ pub async fn run_upstream_sender(
             }
             _ = cancel_token.cancelled() => {
                 info!("end signal received, Upstream cancelled for session {}", session_id);
+                session_mgr.send_end(session_id).await?;
                 break;
             }
         }
