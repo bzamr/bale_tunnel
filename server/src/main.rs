@@ -7,6 +7,7 @@ use reqwest::Url;
 
 mod config;
 mod session_manager;
+mod streamer;
 use config::Config;
 use session_manager::SessionManager;
 
@@ -124,7 +125,7 @@ async fn run_polling(config: Config, session_mgr: SessionManager) -> Result<()> 
                     );
 
                      // extract fileType and sessionID from fileName
-                    if let Ok((file_type, session_id, _seq)) = shared::parse_filename(file_name) {
+                    if let Ok((file_type, session_id, seq)) = shared::parse_filename(file_name) {
                         match file_type {
                             shared::FileType::Conn => {
                                 let session_mngr_clone=session_mgr.clone();
@@ -136,12 +137,30 @@ async fn run_polling(config: Config, session_mgr: SessionManager) -> Result<()> 
                                 });
                             }
                             shared::FileType::Upstream => {
-                                //todo use for tunnel 
                                 debug!("Received data chunk: {:?}", file_type);
+                                if let Some(seq_num) = seq { //seq option come from parse name
+                                    let file_id_clone=doc.file_id.clone();
+                                    let session_mngr_clone=session_mgr.clone();
+                                    let _=tokio::spawn(async move{
+                                        match session_mngr_clone.download_file_content(&file_id_clone).await {
+                                            Ok(content)=>{
+                                                session_mngr_clone
+                                                .on_upstream_chunk(session_id, seq_num, content).await;
+                                                // on_upstream_chunk will send data to steamer via Unbound_channel
+                                            }
+                                            Err(e)=>{
+                                                error!("Failed to download downstream file for session {}: {}",
+                                                        session_id, e);
+                                            }
+                                        } 
+                                    });
+                                }else {
+                                    error!("Missing sequence number for downstream file");
+                                }                       
                             }
                             shared::FileType::End => {
-                                info!("Received end signal for session {}", session_id);
-                                // todo: close connection.
+                                info!("End signal received for session {}, closing...", session_id);
+                                session_mgr.cancel_session(session_id).await;
                             }
                             _=>{ 
                                 warn!("Received unValid file type for session {}", session_id);
