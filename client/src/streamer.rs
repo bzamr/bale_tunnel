@@ -3,7 +3,7 @@ use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};// for stream.read, stream.write
 use tokio::sync::{mpsc::UnboundedReceiver};
 use std::collections::BTreeMap;
-use tracing::{info, error};
+use tracing::{info, warn , error};
 use crate::session_manager::SessionManager;
 use shared::SessionId;
 use tokio_util::sync::CancellationToken;
@@ -60,6 +60,7 @@ pub async fn run_downstream_receiver(
     // Buffer for out‑of‑order chsunk (seq -> data)
     let mut pending = BTreeMap::new();// sorted by seq
     let mut next_seq = 0u32; // Next expected sequence number
+    let mut last_activity = tokio::time::Instant::now();//for timeout 
     // this function wait for data from 2 channel:
     // 1: stream_receiver for downstream chunks
     // 2: end notify for end_ file 
@@ -72,10 +73,17 @@ pub async fn run_downstream_receiver(
                     stream.write_all(&chunk).await?;
                     next_seq += 1;
                 }
+                last_activity = tokio::time::Instant::now();
             }
             // end receive 
             _ = cancel_token.cancelled() => {
                 info!("Downstream end signal received for session {}, closing", session_id);
+                break;
+            }
+            // 30s timeout
+            _ = tokio::time::sleep_until(last_activity + tokio::time::Duration::from_secs(30)) => {
+                warn!("No downstream data recieved for 30 seconds, closing session {}", session_id);
+                cancel_token.cancel();
                 break;
             }
         }
