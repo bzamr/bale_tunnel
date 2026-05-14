@@ -127,7 +127,7 @@ impl SessionManager {
         let filename = upstream_filename(session_id, *seq);
         *seq += 1;
         drop(seq_map); // Release lock before network I/O
-        self.send_document(&filename, &data).await
+        self.send_document_with_retry(&filename, &data, 3).await
     }
 
     // Sends an end marker (empty file) to signal the other side that the session is closed.
@@ -179,6 +179,25 @@ impl SessionManager {
         }
         
         Ok(())
+    }
+    // retry send_document upto given numbers of attempts
+    async fn send_document_with_retry(&self, filename: &str, data: &[u8], max_retries: u32) -> Result<()> {
+        let mut attempt = 0;
+        let mut delay = tokio::time::Duration::from_secs(1);
+        loop {
+            match self.send_document(filename, data).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        anyhow::bail!("Failed to send {} after {} retries: {}", filename, max_retries, e);
+                    }
+                    warn!("Retry {}/{} for {} after {:?}: {}", attempt, max_retries, filename, delay, e);
+                    tokio::time::sleep(delay).await;
+                    delay = delay * 2; // backoff: 1s, 2s, 4s, ...
+                }
+            }
+        }
     }
     
     // Called by the polling loop when an ack_<session_id>.bin file is received.

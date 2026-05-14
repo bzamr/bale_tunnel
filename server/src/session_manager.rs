@@ -156,6 +156,24 @@ impl SessionManager {
         Ok(())
     }
 
+    async fn send_document_with_retry(&self, filename: &str, data: &[u8], max_retries: u32) -> Result<()> {
+        let mut attempt = 0;
+        let mut delay = tokio::time::Duration::from_secs(1);
+        loop {
+            match self.send_document(filename, data).await {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        anyhow::bail!("Failed to send {} after {} retries: {}", filename, max_retries, e);
+                    }
+                    warn!("Retry {}/{} for {} after {:?}: {}", attempt, max_retries, filename, delay, e);
+                    tokio::time::sleep(delay).await;
+                    delay = delay * 2; // backoff: 1s, 2s, 4s, ...
+                }
+            }
+        }
+    }
     
     pub async fn register_upstream(&self, session_id: SessionId)
     ->  (UnboundedReceiver<(u32, Vec<u8>)>, CancellationToken) 
@@ -182,7 +200,7 @@ impl SessionManager {
         let filename = shared::downstream_filename(session_id, *seq);
         *seq += 1;
         drop(seq_map); // Release lock before network I/O
-        self.send_document(&filename, &data).await
+        self.send_document_with_retry(&filename, &data, 3).await
     }
     pub async fn on_upstream_chunk(&self, session_id: SessionId, seq: u32, data: Vec<u8>) {
         let senders = self.upstream_senders.lock().await;
