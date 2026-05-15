@@ -1,7 +1,9 @@
 
 mod types;
 mod protocol;
+pub mod compression;
 
+pub use compression::*;
 pub use types::{SessionId, Sequence, FileType};
 pub use protocol::{
     upstream_filename, downstream_filename, conn_filename, ack_filename, end_filename,

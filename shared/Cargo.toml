@@ -10,3 +10,4 @@ serde_json = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+lz4_flex = "0.13.1"
