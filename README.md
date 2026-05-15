@@ -77,18 +77,21 @@ curl --socks5 127.0.0.1:1080 https://check.torproject.org/
 - File size – each chunk is up to 1 MiB (configurable). Large transfers produce many API calls.
 
 ## Project Structure
+
+```text
 bale-tunnel-stream/
-├── client/           # SOCKS5 server + polling loop (receives ack/downstream)
-│   ├── src/          # main.rs, config.rs, socks5_server.rs, session_manager.rs, streamer.rs
+├── client/                 # SOCKS5 server + polling loop (receives ack/downstream)
+│   ├── src/                # main.rs, config.rs, socks5_server.rs, session_manager.rs, streamer.rs
 │   └── Cargo.toml
-├── server/           # Polling loop + TCP connection to final target
-│   ├── src/          # main.rs, config.rs, session_manager.rs, stream_handler.rs
+├── server/                 # Polling loop + TCP connection to final target
+│   ├── src/                # main.rs, config.rs, session_manager.rs, stream_handler.rs
 │   └── Cargo.toml
-├── shared/           # Common types, filename parsing, compression, header
-│   └── src/          # lib.rs, types.rs, protocol.rs, compression.rs
+├── shared/                 # Common types, filename parsing, compression, header
+│   └── src/                # lib.rs, types.rs, protocol.rs, compression.rs
 ├── .env.example
 ├── CHANGELOG.md
 └── README.md
+```
 
 ## Building Release Binaries
 ```bash
