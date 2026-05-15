@@ -1,4 +1,4 @@
-use lz4_flex::{compress_prepend_size, decompress_size_prepend};
+use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 // compress_prepend_size add 4 byte header: original data size
 // decompress_size_prepend read the header and decompress
 
@@ -39,7 +39,7 @@ pub fn decompress(data: &[u8], was_compressed: bool) -> Result<Vec<u8>, anyhow::
     if was_compressed {
         // The compressed format includes a 4-byte header with original length,
         // which `decompress_size_prepend` reads and uses to allocate the output.
-        Ok(decompress_size_prepend(data)?)
+        Ok(decompress_size_prepended(data)?)
     } else {
         // No compression: return a copy of the original data.
         Ok(data.to_vec())

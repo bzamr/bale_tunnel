@@ -7,7 +7,7 @@ pub use compression::*;
 pub use types::{SessionId, Sequence, FileType};
 pub use protocol::{
     upstream_filename, downstream_filename, conn_filename, ack_filename, end_filename,
-    parse_filename, ParseFilenameError,
+    parse_filename, ParseFilenameError,serialize_header, deserialize_header, ChunkHeader, HEADER_SIZE
 };
 
 #[cfg(test)]

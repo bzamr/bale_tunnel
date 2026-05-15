@@ -9,8 +9,8 @@ use shared::SessionId;
 use tokio_util::sync::CancellationToken;
 use bytes::BytesMut;  // for zero‑copy buffering
 use tokio::time::{Duration, timeout};
-use shared::{try_compress, decompress, serialize_header, deserialize_header, ChunkHeader, HEADER_SIZE};
-
+use shared::{serialize_header, deserialize_header, ChunkHeader, HEADER_SIZE};
+use shared::compression::{try_compress,decompress};
 
 // Reads data from the SOCKS5 socket and sends upstream chunks
 // to the server via the Bale bot as u_<session_id>_<seq>.bin files.
@@ -18,6 +18,7 @@ use shared::{try_compress, decompress, serialize_header, deserialize_header, Chu
 // buffer_conf conatains max_chunk_size and inactivity_timeout
 // - max_chunk_size: maximum size of a single upstream chunk (bytes)
 // - inactivity_timeout: how long to wait before flushing an incomplete chunk
+#[allow(unused_assignments)]
 pub async fn run_upstream_sender(
     session_id: SessionId,
     mut stream: tokio::io::ReadHalf<TcpStream>,

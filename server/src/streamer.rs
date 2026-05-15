@@ -14,6 +14,7 @@ use shared::{try_compress, decompress, serialize_header, deserialize_header, Chu
 // buffer_conf conatains max_chunk_size and inactivity_timeout
 // - max_chunk_size: maximum size of a single upstream chunk (bytes)
 // - inactivity_timeout: how long to wait before flushing an incomplete chunk
+#[allow(unused_assignments)]
 pub async fn run_downstream_sender(
     session_id: SessionId,
     mut stream: tokio::io::ReadHalf<TcpStream>,  // read half from split
