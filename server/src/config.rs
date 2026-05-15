@@ -19,6 +19,14 @@ pub struct Config {
     // Long polling timeout in seconds for getUpdates.
     #[serde(default = "default_polling_timeout")]
     pub polling_timeout_seconds: u64,
+
+    // max chunk buffer size (Byte),default=1MB
+    #[serde(default = "default_max_chunk_size")]
+    pub max_chunk_size_bytes: usize,
+
+    // inactivity timeout to send unfilled buffer
+    #[serde(default = "default_inactivity_timeout_ms")]
+    pub inactivity_timeout_ms: u64,
 }
 
 fn default_api_base_url() -> String {
@@ -28,6 +36,10 @@ fn default_api_base_url() -> String {
 fn default_polling_timeout() -> u64 {
     30
 }
+
+fn default_max_chunk_size() -> usize { 1_048_576 }   // 1 MB
+
+fn default_inactivity_timeout_ms() -> u64 { 10 } // 10 miliSecond
 
 impl Config {
     // Load configuration from environment variables.

@@ -3,42 +3,82 @@ use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};// for stream.read, stream.write
 use tokio::sync::{mpsc::UnboundedReceiver};
 use std::collections::BTreeMap;
-use tracing::{info, warn , error};
+use tracing::{info, warn, error};
 use crate::session_manager::SessionManager;
 use shared::SessionId;
 use tokio_util::sync::CancellationToken;
+use bytes::BytesMut;  // for zero‑copy buffering
+use tokio::time::{Duration, timeout};
 
 
 // Reads data from the SOCKS5 socket and sends upstream chunks
 // to the server via the Bale bot as u_<session_id>_<seq>.bin files.
 // The stream is expected to be the read half of a split TcpStream.
+// buffer_conf conatains max_chunk_size and inactivity_timeout
+// - max_chunk_size: maximum size of a single upstream chunk (bytes)
+// - inactivity_timeout: how long to wait before flushing an incomplete chunk
 pub async fn run_upstream_sender(
     session_id: SessionId,
-    mut stream: tokio::io::ReadHalf<TcpStream>,  // read half from split
+    mut stream: tokio::io::ReadHalf<TcpStream>,
     session_mgr: SessionManager,
     cancel_token: CancellationToken,
+    buffer_conf:(usize,u64) 
 ) -> Result<()> {
-    // Use a 1 MiB buffer to match the maximum chunk size allowed by the protocol.
-    // todo : make buffer dynamic 
-    let mut buf = vec![0u8; 1024 * 1024]; // 1 MiB
+    // Use a dynamically sized buffer (BytesMut) that grows up to max_chunk_size.
+    let max_chunk_size: usize=buffer_conf.0;
+    let inactivity_timeout: Duration=tokio::time::Duration::from_millis(buffer_conf.1);
+    let mut buffer = BytesMut::with_capacity(max_chunk_size);
     loop {
         tokio::select! {
-            res= stream.read(&mut buf)=> {
-            let n=res?;
-            // EOF (0 bytes read) means the browser closed the connection.
-            if n == 0 {
-                info!("Upstream EOF for session {}, sending end", session_id);
-                session_mgr.send_end(session_id).await?;
-                break;
-            }
-            let data = buf[..n].to_vec();  // Copy the actual read bytes(rest of buffer is 0).
-            if let Err(e) = session_mgr.send_upstream_chunk(session_id, data).await {
-                error!("Failed to send upstream chunk: {}", e);
-                return Err(e);// todo : retry by checking error ( rate limit, ...)
-            }
+            // Attempt to read more data, but with a timeout to detect inactivity.
+            res = timeout(inactivity_timeout, stream.read_buf(&mut buffer)) => {
+                match res {
+                    Ok(Ok(0)) => {
+                        // EOF: browser closed the connection
+                        info!("Upstream EOF for session {}, flushing remaining buffer", session_id);
+                        if !buffer.is_empty() {
+                            //debug!("Sending chunk of {} bytes", data.len());
+                            let data = buffer.split().to_vec();// todo: change send_upstream parameter to Byte
+                            session_mgr.send_upstream_chunk(session_id, data).await?;
+                        }
+                        session_mgr.send_end(session_id).await?;
+                        break;
+                    }
+                    Ok(Ok(_n)) => {
+                        // Data received successfully
+                        if buffer.len() >= max_chunk_size {
+                            // Buffer full: send immediately
+                            // extra data will remain in buffer(extra safty)
+                            // read_buf fill upto buffer capacity, so shouldn't have extra data
+                            // debug!("Sending chunk of {} bytes", data.len());
+                            let data = buffer.split_to(max_chunk_size).to_vec();
+                            session_mgr.send_upstream_chunk(session_id, data).await?;
+                        }
+                        // Continue reading (buffer may still have space)
+                    }
+                    Ok(Err(e)) => {
+                        error!("stream Read error: {}", e);
+                        return Err(e.into());
+                    }
+                    Err(_timeout) => {
+                        // Inactivity timeout triggered – flush any pending data
+                        if !buffer.is_empty() {
+                            info!("Flushing {} bytes due to inactivity", buffer.len());
+                            //debug!("Sent chunk of {} bytes", data.len());
+                            let data = buffer.split().to_vec();
+                            session_mgr.send_upstream_chunk(session_id, data).await?;
+
+                        }
+                    }
+                }
             }
             _ = cancel_token.cancelled() => {
-                info!("end signal received, Upstream cancelled for session {}", session_id);
+                info!("End signal received, Upstream cancelled for session {}", session_id);
+                // Send any remaining buffered data before closing
+                if !buffer.is_empty() {
+                    let data = buffer.split().to_vec();
+                    session_mgr.send_upstream_chunk(session_id, data).await?;
+                }
                 session_mgr.send_end(session_id).await?;
                 break;
             }

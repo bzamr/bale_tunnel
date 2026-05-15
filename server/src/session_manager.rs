@@ -40,6 +40,7 @@ impl SessionManager {
         &self,
         session_id: SessionId,
         file_id: &str,
+        buffer_conf:(usize,u64),
     ) -> Result<()> {
         // step1:download conn_ file 
         let content = self.download_file_content(file_id).await?;
@@ -69,7 +70,7 @@ impl SessionManager {
                 // Spawn a task to read from the stream and send downstream chunks (content of d_ files).
                 let _upstream_task = tokio::spawn(async move {
                     if let Err(e) = crate::streamer::
-                            run_downstream_sender(session_id, read_half, mgr_clone, cancel_token_clone).await {
+                            run_downstream_sender(session_id, read_half, mgr_clone, cancel_token_clone,buffer_conf).await {
                         error!("Upstream task error: {}", e);
                     }
                 });

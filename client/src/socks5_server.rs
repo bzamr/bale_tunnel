@@ -11,7 +11,8 @@ use crate::streamer;
 
 
 // run socks5 server on the declared addr in .env file 
-pub async fn run_socks5_server(listen_addr: SocketAddr, session_mgr: SessionManager) -> Result<()> {
+// buffer_conf contain max_buffer_size and inactivity_timeout
+pub async fn run_socks5_server(listen_addr: SocketAddr, session_mgr: SessionManager,buffer_conf:(usize,u64)) -> Result<()> {
     let listener = TcpListener::bind(listen_addr)
         .await
         .with_context(|| format!("Failed to bind to {}", listen_addr))?;//if port is taken or ...
@@ -22,14 +23,14 @@ pub async fn run_socks5_server(listen_addr: SocketAddr, session_mgr: SessionMana
         info!("Accepted connection from {}", peer_addr);
         let session_mgr_clone = session_mgr.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_socks5_connection(stream, peer_addr,session_mgr_clone).await {
+            if let Err(e) = handle_socks5_connection(stream, peer_addr,session_mgr_clone,buffer_conf).await {
                 warn!("Error handling connection from {}: {}", peer_addr, e);
             }
         });
     }
 }
 
-async fn handle_socks5_connection(stream: TcpStream, peer_addr: SocketAddr, session_mgr: SessionManager) -> Result<()> {
+async fn handle_socks5_connection(stream: TcpStream, peer_addr: SocketAddr, session_mgr: SessionManager,buffer_conf:(usize,u64)) -> Result<()> {
     //fast-socks5 use Typestate and has 3 state: Unauthenticated, Authenticated, CommandRead
     // in each state, only some functions can be call 
     // step1: handshake with no_auth
@@ -85,11 +86,11 @@ async fn handle_socks5_connection(stream: TcpStream, peer_addr: SocketAddr, sess
                 session_mgr.register_downstream(session_id).await;       
             let mgr_clone = session_mgr.clone();
             let cancel_token_clone = cancel_token.clone();
-        
+
             // Spawn a task to read from the SOCKS5 socket and send upstream chunks (content of u_ files).
             let _upstream_task = tokio::spawn(async move {
                 if let Err(e) = streamer::
-                        run_upstream_sender(session_id, read_half, mgr_clone, cancel_token_clone).await {
+                        run_upstream_sender(session_id, read_half, mgr_clone, cancel_token_clone, buffer_conf).await {
                     error!("Upstream task error: {}", e);
                 }
             });

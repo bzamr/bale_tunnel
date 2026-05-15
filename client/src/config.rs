@@ -25,6 +25,14 @@ pub struct Config {
     // Optional; defaults to "127.0.0.1:1080".
     #[serde(default = "default_socks5_addr")]
     pub socks5_listen_addr: String,
+
+    // max chunk buffer size (Byte),default=1MB
+    #[serde(default = "default_max_chunk_size")]
+    pub max_chunk_size_bytes: usize,
+
+    // inactivity timeout to send unfilled buffer
+    #[serde(default = "default_inactivity_timeout_ms")]
+    pub inactivity_timeout_ms: u64,
 }
 
 // Default Bale API base URL.
@@ -41,6 +49,11 @@ fn default_polling_timeout() -> u64 {
 fn default_socks5_addr() -> String {
     "127.0.0.1:1080".to_string()
 }
+
+fn default_max_chunk_size() -> usize { 1_048_576 }   // 1 MB
+
+fn default_inactivity_timeout_ms() -> u64 { 10 } // 10 miliSecond
+
 
 impl Config {
     // Loads configuration from environment variables.

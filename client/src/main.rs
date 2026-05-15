@@ -78,9 +78,10 @@ async fn main() -> Result<()> {
         .context("Failed to create HTTP client")?;
     let session=SessionManager::new(client.clone(),config.bale_client_bot_token.clone(),config.bale_chat_id.to_string() ,config.bale_api_base_url.clone());
     let session_clone=session.clone();
+    let buffer_conf=(config.max_chunk_size_bytes,config.inactivity_timeout_ms);// used for data buffering instead of immediatly sending. 
     // task1: socks5 server (defined at client/src/socks5_server.rs)
     let socks5_task = tokio::spawn(async move {
-        if let Err(e) = socks5_server::run_socks5_server(socks5_addr,session).await {
+        if let Err(e) = socks5_server::run_socks5_server(socks5_addr,session,buffer_conf).await {
             error!("SOCKS5 server terminated: {}", e);
         }
     });
