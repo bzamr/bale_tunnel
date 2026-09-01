@@ -1,78 +1,60 @@
 use anyhow::Result;
 use serde::Deserialize;
-// load config for bale-tunnel client form .env file (auto convert uppercase)
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    // Bale bot token obtained from @BotFather.
-    // Mandatory field; causes an error if missing.
     pub bale_client_bot_token: String,
-
-    // DemirBot channel -for bot sending file 
     pub bale_chat_id: i64,
 
-    // Base URL for the Bale Bot API.
-    // Optional; defaults to "https://tapi.bale.ai".
     #[serde(default = "default_api_base_url")]
     pub bale_api_base_url: String,
 
-    // Long polling timeout in seconds for getUpdates requests.
-    // Optional; defaults to 30 seconds.
+    /// Long polling timeout in seconds for getUpdates.
     #[serde(default = "default_polling_timeout")]
     pub polling_timeout_seconds: u64,
 
-    // Local SOCKS5 server listen address .
-    // Optional; defaults to "127.0.0.1:1080".
+    /// Local SOCKS5 listen address.
     #[serde(default = "default_socks5_addr")]
     pub socks5_listen_addr: String,
 
-    // max chunk buffer size (Byte),default=1MB
+    /// Max chunk buffer size in bytes (default 1 MB).
     #[serde(default = "default_max_chunk_size")]
     pub max_chunk_size_bytes: usize,
 
-    // inactivity timeout to send unfilled buffer
+    /// Inactivity timeout in ms before flushing a partial buffer (default 500 ms).
+    /// A value of 10 ms was too aggressive for a tunnel carried over a bot API
+    /// (one HTTP upload per chunk).
     #[serde(default = "default_inactivity_timeout_ms")]
     pub inactivity_timeout_ms: u64,
 }
 
-// Default Bale API base URL.
 fn default_api_base_url() -> String {
     "https://tapi.bale.ai".to_string()
 }
 
-// Default long polling timeout (seconds).
 fn default_polling_timeout() -> u64 {
     30
 }
 
-// Default SOCKS5 listen address.
 fn default_socks5_addr() -> String {
     "127.0.0.1:1080".to_string()
 }
 
-fn default_max_chunk_size() -> usize { 1_048_576 }   // 1 MB
+fn default_max_chunk_size() -> usize {
+    1_048_576 // 1 MB
+}
 
-fn default_inactivity_timeout_ms() -> u64 { 10 } // 10 miliSecond
-
+/// 500 ms — long enough to batch a few reads, short enough to stay responsive.
+fn default_inactivity_timeout_ms() -> u64 {
+    500
+}
 
 impl Config {
-    // Loads configuration from environment variables.
-    // # Prerequisites
-    // `dotenvy::dotenv().ok()` should have been called before this method
-    // to load the `.env` file, if present.
-    // # Errors
-    // Returns an error if any mandatory environment variable is missing
-    // or fails to parse into the expected type.
+    /// Loads configuration from environment variables.
+    ///
+    /// # Prerequisites
+    /// `dotenvy::dotenv().ok()` should have been called first.
     pub fn from_env() -> Result<Self> {
         Ok(envy::from_env::<Config>()?)
-        //turbo-fish: from_env::<type> declare the the return type 
-    }
-
-    // Constructs the full URL for the getUpdates API endpoint.
-    pub fn get_updates_url(&self) -> String {
-        format!(
-            "{}/bot{}/getUpdates",
-            self.bale_api_base_url, self.bale_client_bot_token
-        )
     }
 }

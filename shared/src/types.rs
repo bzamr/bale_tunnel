@@ -1,8 +1,11 @@
 use uuid::Uuid;
 use std::fmt;
 
-pub type SessionId = Uuid;// a random unique ID for each socks5 connection
-pub type Sequence = u32;// keep the order of chunks, seperated for upstream and downstream 
+pub type SessionId = Uuid;
+pub type Sequence = u32;
+
+/// Pairs that travel across the Bale channel: `(seq, raw_chunk_data)`.
+pub type ChunkPair = (u32, Vec<u8>);
 
 #[derive(Debug,PartialEq)]
 pub enum FileType {
@@ -22,6 +25,6 @@ impl fmt::Display for FileType {
             FileType::Downstream => "d",
             FileType::End => "end",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }

@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
-use tokio::time::{sleep, Duration, timeout};
 use tracing::{debug, error, info, warn};
-use reqwest::Url;
+
+use shared::bot_api::BotApi;
 
 mod config;
 mod session_manager;
@@ -11,280 +10,186 @@ mod streamer;
 use config::Config;
 use session_manager::SessionManager;
 
-
-// ---------- Bale API response structures ----------
-#[derive(Debug, serde::Deserialize)]
-struct GetUpdatesResponse {
-    ok: bool,
-    result: Vec<Update>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Update {
-    update_id: i64,
-    message: Option<Message>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Message {
-    message_id: i64,
-    document: Option<Document>,
-     chat:Chat,
-}
-// A chat within a message (simplified )
-#[derive(Debug, serde::Deserialize)]
-struct Chat {
-    id:i64,   // channel chatId used for communication 
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Document {
-    file_id: String,
-    file_name: Option<String>,
-}
-
-// ---------- Polling task ----------
-async fn run_polling(config: Config, session_mgr: SessionManager) -> Result<()> {
-    info!("Starting server polling loop (receiving tunnel chunks from client)");
-    // Create an HTTP client with a global timeout, 10 sec longer than the long polling timeout.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
-        .build()
-        .context("Failed to create HTTP client")?;
-
-    // delete old messages
-    cleanup_old_updates(&client, &config, config.bale_chat_id).await?;
-
-    let last_update_id = Arc::new(AtomicI64::new(0));
-    let get_updates_url = config.get_updates_url();
-
-    loop {
-        let offset = last_update_id.load(Ordering::SeqCst) + 1;
-
-        let url_with_params = Url::parse_with_params(
-            &get_updates_url,
-            &[
-                ("offset", offset.to_string()),
-                ("timeout", config.polling_timeout_seconds.to_string()),
-            ],
-        )
-        .context("Failed to construct URL with params")?;
-
-        debug!("Server polling with offset={}", offset);
-
-        let request_future = client.get(url_with_params).send();
-        let response = match timeout(
-            Duration::from_secs(config.polling_timeout_seconds + 5),
-            request_future,
-        )
-        .await
-        {
-            Ok(res) => res.context("HTTP request failed")?,
-            Err(_) => {
-                warn!(" Polling request timeout, retrying...");
-                sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            error!("API error: {} - {}", status, text);
-            sleep(Duration::from_secs(2)).await;
-            continue;
-        }
-
-        let updates: GetUpdatesResponse = match response.json().await {
-            Ok(up) => up,
-            Err(e) => {
-                error!("Failed to parse JSON: {}", e);
-                sleep(Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-
-        if !updates.ok {
-            error!("Server: Bale API returned ok=false");
-            sleep(Duration::from_secs(1)).await;
-            continue;
-        }
-        // to check if received update is from communication channel
-        let expected_chat_id=config.bale_chat_id;
-
-        if updates.result.is_empty() {
-            sleep(Duration::from_millis(100)).await;
-            continue;
-        }
-        for update in updates.result {
-            let update_id = update.update_id;
-            last_update_id.store(update_id, Ordering::SeqCst);
-            //check of its a communication message through channel
-            if let Some(msg) = update.message {
-                if msg.chat.id != expected_chat_id{
-                warn!("Receive update from unrelevant chat, ignoring.");
-                continue;
-                }
-                if let Some(doc) = &msg.document {
-                    let file_name = doc.file_name.as_deref().unwrap_or("(no name)");
-                    info!(
-                        "📄 Server received document: file_id={}, file_name={}",
-                        doc.file_id, file_name
-                    );
-
-                     // extract fileType and sessionID from fileName
-                    if let Ok((file_type, session_id, seq)) = shared::parse_filename(file_name) {
-                        match file_type {
-                            shared::FileType::Conn => {
-                                let session_mngr_clone=session_mgr.clone();
-                                let file_id_clone = doc.file_id.clone();
-                                let buffer_conf=(config.max_chunk_size_bytes,config.inactivity_timeout_ms);
-                                tokio::spawn(async move{
-                                    if let Err(e) = session_mngr_clone.handle_conn_file(session_id, &file_id_clone, buffer_conf).await {
-                                    error!("Failed to handle conn for {}: {}", session_id, e);
-                                }
-                                });
-                            }
-                            shared::FileType::Upstream => {
-                                debug!("Received data chunk: {:?}", file_type);
-                                if let Some(seq_num) = seq { //seq option come from parse name
-                                    let file_id_clone=doc.file_id.clone();
-                                    let session_mngr_clone=session_mgr.clone();
-                                    let _=tokio::spawn(async move{
-                                        match session_mngr_clone.download_file_content(&file_id_clone).await {
-                                            Ok(content)=>{
-                                                session_mngr_clone
-                                                .on_upstream_chunk(session_id, seq_num, content).await;
-                                                // on_upstream_chunk will send data to steamer via Unbound_channel
-                                            }
-                                            Err(e)=>{
-                                                error!("Failed to download downstream file for session {}: {}",
-                                                        session_id, e);
-                                            }
-                                        } 
-                                    });
-                                }else {
-                                    error!("Missing sequence number for downstream file");
-                                }                       
-                            }
-                            shared::FileType::End => {
-                                info!("End signal received for session {}, closing...", session_id);
-                                session_mgr.cancel_session(session_id).await;
-                            }
-                            _=>{ 
-                                warn!("Received unValid file type for session {}", session_id);
-                            }
-                        }
-                    } else {
-                        debug!("Unknown file format: {}", file_name);
-                    }
-                } else {
-                    debug!("Server: message has no document, ignoring");
-                }
-                 let client_clone=client.clone();
-                let config_clone=config.clone();
-                tokio::spawn(async move{
-                if let Err(e) = delete_message(
-                &client_clone,
-                config_clone,
-                msg.message_id,
-                ).await {
-                error!("Failed to delete message {}: {}", msg.message_id, e);
-                } else {
-                   debug!("Deleted message {}", msg.message_id);
-                }
-                });
-            } else {
-                debug!("Server: update {} has no message", update_id);
-            }
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
-
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    info!("Starting Bale Tunnel Server with SessionManager");
+    info!("Starting Bale Tunnel Server");
 
     let config = Config::from_env().context("Failed to load server config from environment")?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(config.polling_timeout_seconds + 10))
-        .build()?;
-    let session_mgr = SessionManager::new(client, config.clone());
-    // Run polling in a separate task 
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(config.polling_timeout_seconds + 10))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    let bot_api = BotApi::new(
+        http_client,
+        config.bale_server_bot_token.clone(),
+        config.bale_chat_id,
+        config.bale_api_base_url.clone(),
+    );
+
+    let session_mgr = SessionManager::new(bot_api.clone());
+
     let polling_task = tokio::spawn(async move {
-        if let Err(e) = run_polling(config,session_mgr).await {
-            error!("Polling task terminated with error: {}", e);
+        if let Err(e) = run_polling(&config, bot_api, session_mgr).await {
+            error!("Polling task terminated: {e}");
         }
     });
 
-    // Wait for Ctrl+C or termination signal
     tokio::signal::ctrl_c()
         .await
-        .expect("Failed to install Ctrl+C handler");
+        .context("Failed to install Ctrl+C handler")?;
     info!("Shutdown signal received, exiting gracefully...");
 
-    // Abort polling task (optional, but good practice)
     polling_task.abort();
-    
     Ok(())
 }
-// call bale api deleteMessage method with messageID, chatID
-async fn delete_message(
-    client: &reqwest::Client,
-    config:Config,
-    message_id: i64,
-) -> Result<()> {
-    let url = format!("{}/bot{}/deleteMessage", config.bale_api_base_url, config.bale_server_bot_token);
-    let response = client
-        .post(&url)
-        .json(&serde_json::json!({
-            "chat_id": config.bale_chat_id,
-            "message_id": message_id
-        }))
-        .send()
-        .await
-        .context("Failed to call deleteMessage")?;
-    if !response.status().is_success() {
-        let text = response.text().await.unwrap_or_default();
-        anyhow::bail!("deleteMessage failed: {}", text);
-    }
-    Ok(())
-}
-async fn cleanup_old_updates(
-    client: &reqwest::Client,
+
+async fn run_polling(
     config: &Config,
-    expected_chat_id: i64,
+    bot_api: BotApi,
+    session_mgr: SessionManager,
 ) -> Result<()> {
-    let url = config.get_updates_url();
-    let resp = client
-        .get(&url)
-        .json(&serde_json::json!({"offset": "0","timeout":"0"}))    //previous updates
-        .send()
-        .await
-        .context("Failed to fetch updates for cleanup")?;
-    let updates: GetUpdatesResponse = resp.json().await?;
-    for update in updates.result {
-        if let Some(msg) = update.message {
-            if msg.chat.id == expected_chat_id {
-                let client_clone=client.clone();
-                let config_clone=config.clone();
-                tokio::spawn(async move{
-                    let _ = delete_message(
-                    &client_clone,
-                    config_clone,
-                    msg.chat.id,
-                )
-                .await;
-                });
+    bot_api.cleanup_old_updates().await?;
+
+    let last_update_id = std::sync::Arc::new(AtomicI64::new(0));
+    let expected_chat_id = config.bale_chat_id;
+
+    loop {
+        let offset = last_update_id.load(Ordering::SeqCst) + 1;
+
+        let updates = match bot_api
+            .poll_updates(offset, config.polling_timeout_seconds)
+            .await
+        {
+            Ok(Some(updates)) => updates,
+            Ok(None) => continue,
+            Err(e) => {
+                warn!("Polling error: {e}, retrying…");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        if updates.result.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        }
+
+        for update in updates.result {
+            let update_id = update.update_id;
+            last_update_id.store(update_id, Ordering::SeqCst);
+
+            let Some(msg) = update.message else {
+                debug!("Server: update {update_id} has no message");
+                continue;
             };
+
+            if msg.chat.id != expected_chat_id {
+                warn!("Received update from irrelevant chat, ignoring");
+                continue;
+            }
+
+            if let Some(doc) = &msg.document {
+                let file_name = doc.file_name.as_deref().unwrap_or("(no name)");
+                info!("📄 Server received document: file_id={}, file_name={}", doc.file_id, file_name);
+
+                match shared::parse_filename(file_name) {
+                    Ok((file_type, session_id, seq)) => {
+                        process_document(
+                            &bot_api,
+                            &session_mgr,
+                            config,
+                            file_type,
+                            session_id,
+                            seq,
+                            &doc.file_id,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        debug!("Unknown file format '{file_name}': {e}");
+                    }
+                }
+            } else {
+                debug!("Server: message has no document, ignoring");
+            }
+
+            let api = bot_api.clone();
+            let msg_id = msg.message_id;
+            tokio::spawn(async move {
+                // A short delay gives the peer bot's getFile() time to finish
+                // before the message (and possibly its file) disappears.
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if let Err(e) = api.delete_message(msg_id).await {
+                    error!("Failed to delete message {msg_id}: {e}");
+                } else {
+                    debug!("Deleted message {msg_id}");
+                }
+            });
         }
     }
-    Ok(())
+}
+
+async fn process_document(
+    bot_api: &BotApi,
+    session_mgr: &SessionManager,
+    config: &Config,
+    file_type: shared::FileType,
+    session_id: shared::SessionId,
+    seq: Option<shared::Sequence>,
+    file_id: &str,
+) {
+    use shared::FileType;
+
+    match file_type {
+        FileType::Conn => {
+            let mgr = session_mgr.clone();
+            let fid = file_id.to_string();
+            let buf_conf = (config.max_chunk_size_bytes, config.inactivity_timeout_ms);
+            tokio::spawn(async move {
+                if let Err(e) = mgr.handle_conn_file(session_id, &fid, buf_conf).await {
+                    error!("Failed to handle conn for {session_id}: {e}");
+                }
+            });
+        }
+
+        FileType::Upstream => {
+            debug!("Received upstream chunk: seq={seq:?}");
+            let Some(seq_num) = seq else {
+                error!("Missing sequence number for upstream chunk");
+                return;
+            };
+            let mgr = session_mgr.clone();
+            let api = bot_api.clone();
+            let fid = file_id.to_string();
+            tokio::spawn(async move {
+                match api.download_file(&fid).await {
+                    Ok(content) => {
+                        mgr.on_upstream_chunk(session_id, seq_num, content).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to download upstream chunk for session {session_id}: {e}");
+                    }
+                }
+            });
+        }
+
+        FileType::End => {
+            info!("End signal received for session {session_id}, closing…");
+            session_mgr.cancel_session(session_id).await;
+        }
+
+        // The shared channel echoes our own uploads (d_/ack_/end_) back to us;
+        // these are expected and safe to ignore, so log at debug level.
+        other => {
+            debug!("Ignoring echo of own upload ({other:?}) for session {session_id}");
+        }
+    }
 }

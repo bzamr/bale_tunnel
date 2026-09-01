@@ -1,89 +1,74 @@
 use anyhow::Result;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};// for stream.read, stream.write
-use tokio::sync::{mpsc::UnboundedReceiver};
+use bytes::BytesMut;
 use std::collections::BTreeMap;
-use tracing::{info, warn, error};
-use crate::session_manager::SessionManager;
-use shared::SessionId;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::{timeout, Duration};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
-use bytes::BytesMut;  // for zero‑copy buffering
-use tokio::time::{Duration, timeout};
-use shared::{try_compress, decompress, serialize_header, deserialize_header, ChunkHeader, HEADER_SIZE};
+use tracing::{error, info, warn};
 
-// buffer_conf conatains max_chunk_size and inactivity_timeout
-// - max_chunk_size: maximum size of a single upstream chunk (bytes)
-// - inactivity_timeout: how long to wait before flushing an incomplete chunk
-#[allow(unused_assignments)]
+use shared::compression::{decompress, try_compress};
+use shared::{deserialize_header, serialize_header, ChunkHeader, ChunkPair, SessionId, HEADER_SIZE};
+
+use crate::session_manager::SessionManager;
+
+/// Reads from the TCP stream and sends downstream chunks to the client.
 pub async fn run_downstream_sender(
     session_id: SessionId,
-    mut stream: tokio::io::ReadHalf<TcpStream>,  // read half from split
+    mut stream: tokio::io::ReadHalf<TcpStream>,
     session_mgr: SessionManager,
     cancel_token: CancellationToken,
-    buffer_conf:(usize,u64) 
+    buffer_conf: (usize, u64),
 ) -> Result<()> {
-    let max_chunk_size: usize=buffer_conf.0;
-    let inactivity_timeout: Duration=tokio::time::Duration::from_millis(buffer_conf.1);
+    let max_chunk_size: usize = buffer_conf.0;
+    let inactivity_timeout = Duration::from_millis(buffer_conf.1);
     let mut buffer = BytesMut::with_capacity(max_chunk_size);
-    let mut seq = 0u32;//keep trace of sequences
+    let mut seq = 0u32;
 
     loop {
-          tokio::select! {
-            // Attempt to read more data, but with a timeout to detect inactivity.
+        tokio::select! {
             res = timeout(inactivity_timeout, stream.read_buf(&mut buffer)) => {
                 match res {
                     Ok(Ok(0)) => {
-                        // EOF (0 bytes read) means the host closed the connection.
-                        info!("downstream EOF for session {}, flushing remaining buffer", session_id);
+                        info!("Downstream EOF for session {session_id}, flushing remaining buffer");
                         if !buffer.is_empty() {
-                            //debug!("Sending chunk of {} bytes", data.len());
-                            let data = buffer.split().to_vec();// todo: change send_upstream parameter to Byte
-                            let packet = build_packet(session_id, seq, data)?;
+                            let data = buffer.split().to_vec();
+                            let packet = build_packet(session_id, seq, &data);
                             session_mgr.send_downstream_chunk(session_id, packet).await?;
-                            seq += 1;
                         }
                         session_mgr.send_end(session_id).await?;
                         break;
                     }
                     Ok(Ok(_n)) => {
-                        // Data received successfully
                         if buffer.len() >= max_chunk_size {
-                            // Buffer full: send immediately
-                            // extra data will remain in buffer(extra safty)
-                            // read_buf fill upto buffer capacity, so shouldn't have extra data
-                            // debug!("Sending chunk of {} bytes", data.len());
                             let data = buffer.split_to(max_chunk_size).to_vec();
-                            let packet = build_packet(session_id, seq, data)?;
+                            let packet = build_packet(session_id, seq, &data);
                             session_mgr.send_downstream_chunk(session_id, packet).await?;
                             seq += 1;
                         }
-                        // Continue reading (buffer may still have space)
                     }
                     Ok(Err(e)) => {
-                        error!("stream Read error: {}", e);
+                        error!("Stream read error: {e}");
                         return Err(e.into());
                     }
-                    Err(_timeout) => {
-                        // Inactivity timeout triggered – flush any pending data
+                    Err(_elapsed) => {
                         if !buffer.is_empty() {
-                            info!("Flushing {} bytes due to inactivity", buffer.len());
-                            //debug!("Sent chunk of {} bytes", data.len());
+                            info!("Flushing {} bytes due to inactivity (downstream)", buffer.len());
                             let data = buffer.split().to_vec();
-                            let packet = build_packet(session_id, seq, data)?;
+                            let packet = build_packet(session_id, seq, &data);
                             session_mgr.send_downstream_chunk(session_id, packet).await?;
                             seq += 1;
                         }
                     }
                 }
             }
-            _ = cancel_token.cancelled() => {
-                info!("End signal received, downstream cancelled for session {}", session_id);
-                // Send any remaining buffered data before closing
+            () = cancel_token.cancelled() => {
+                info!("End signal received, downstream cancelled for session {session_id}");
                 if !buffer.is_empty() {
                     let data = buffer.split().to_vec();
-                    let packet = build_packet(session_id, seq, data)?;
+                    let packet = build_packet(session_id, seq, &data);
                     session_mgr.send_downstream_chunk(session_id, packet).await?;
-                    seq += 1;
                 }
                 session_mgr.send_end(session_id).await?;
                 break;
@@ -93,41 +78,24 @@ pub async fn run_downstream_sender(
     Ok(())
 }
 
+/// Receives upstream chunks from the channel and writes them to the TCP stream.
 pub async fn run_upstream_receiver(
     session_id: SessionId,
-    mut stream: tokio::io::WriteHalf<TcpStream>,  // write half from split
-    mut rx_data: UnboundedReceiver<(u32, Vec<u8>)>,
+    mut stream: tokio::io::WriteHalf<TcpStream>,
+    mut rx_data: UnboundedReceiver<ChunkPair>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
-    // Buffer for out‑of‑order chsunk (seq -> data)
-    let mut pending = BTreeMap::new();// sorted by seq
-    let mut next_seq = 0u32; // Next expected sequence number
-    let mut last_activity = tokio::time::Instant::now();//for timeout 
+    let mut pending: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
+    let mut next_seq = 0u32;
+    let mut last_activity = tokio::time::Instant::now();
 
-    loop{
-         tokio::select! {
-            // steam data receive
+    loop {
+        tokio::select! {
             Some((hint_seq, packet)) = rx_data.recv() => {
-                // Try to parse header
-                let (real_seq, payload) = if packet.len() >= HEADER_SIZE {
-                    if let Some(header) = deserialize_header(&packet[..HEADER_SIZE]) {
-                        let payload_data = &packet[HEADER_SIZE..];
-                        match decompress(payload_data, header.is_compressed()) {
-                            Ok(data) => (header.seq, data),
-                            Err(e) => {
-                                error!("Failed to decompress chunk: {}", e);
-                                cancel_token.cancel();
-                                break;
-                            }
-                        }
-                    } else {
-                        // Invalid header – treat as legacy packet
-                        (hint_seq, packet)
-                    }
-                } else {//It's a legacy packet without header
-                    (hint_seq, packet)
+                let (real_seq, payload) = parse_or_legacy(&packet, hint_seq, &cancel_token);
+                let Some(payload) = payload else {
+                    break;
                 };
-                
                 pending.insert(real_seq, payload);
                 while let Some(chunk) = pending.remove(&next_seq) {
                     stream.write_all(&chunk).await?;
@@ -135,26 +103,51 @@ pub async fn run_upstream_receiver(
                 }
                 last_activity = tokio::time::Instant::now();
             }
-            // end receive 
-            _ = cancel_token.cancelled() => {
-                info!("upstream end signal received for session {}, closing", session_id);
+            () = cancel_token.cancelled() => {
+                info!("Upstream end signal for session {session_id}, closing");
                 break;
             }
-            // 30s timeout
-            _ = tokio::time::sleep_until(last_activity + tokio::time::Duration::from_secs(30)) => {
-                warn!("No downstream data recieved for 30 seconds, closing session {}", session_id);
+            () = tokio::time::sleep_until(last_activity + Duration::from_secs(30)) => {
+                warn!("No upstream data for 30 seconds, closing session {session_id}");
                 cancel_token.cancel();
                 break;
             }
         }
     }
-    info!("upstream channel closed for session {}", session_id);
+    info!("Upstream channel closed for session {session_id}");
     Ok(())
 }
 
-// Helper: build a complete packet (header + compressed/plain payload)
-fn build_packet(session_id: SessionId, seq: u32, data: Vec<u8>) -> Result<Vec<u8>> {
-    let (payload, was_compressed) = try_compress(&data);
+/// Attempt to parse a chunk header; fall back to legacy (headerless) packet.
+/// If decompression fails, `cancel_token` is triggered and `(0, None)` is returned.
+fn parse_or_legacy(
+    packet: &[u8],
+    hint_seq: u32,
+    cancel_token: &CancellationToken,
+) -> (u32, Option<Vec<u8>>) {
+    if packet.len() < HEADER_SIZE {
+        return (hint_seq, Some(packet.to_vec()));
+    }
+    match deserialize_header(&packet[..HEADER_SIZE]) {
+        Some(header) => {
+            let payload_data = &packet[HEADER_SIZE..];
+            match decompress(payload_data, header.is_compressed()) {
+                Ok(data) => (header.seq, Some(data)),
+                Err(e) => {
+                    error!("Failed to decompress chunk: {e}");
+                    cancel_token.cancel();
+                    (0, None)
+                }
+            }
+        }
+        None => (hint_seq, Some(packet.to_vec())),
+    }
+}
+
+/// Build a complete packet (header + compressed/plain payload).
+#[expect(clippy::cast_possible_truncation, reason = "chunks capped at max_chunk_size (~1 MB)")]
+fn build_packet(session_id: SessionId, seq: u32, data: &[u8]) -> Vec<u8> {
+    let (payload, was_compressed) = try_compress(data);
     let header = ChunkHeader::new(
         session_id.to_u128_le(),
         seq,
@@ -165,5 +158,5 @@ fn build_packet(session_id: SessionId, seq: u32, data: Vec<u8>) -> Result<Vec<u8
     let header_bytes = serialize_header(&header);
     let mut packet = header_bytes.to_vec();
     packet.extend_from_slice(&payload);
-    Ok(packet)
+    packet
 }
