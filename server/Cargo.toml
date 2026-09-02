@@ -3,6 +3,9 @@ name = "server"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 tokio = { workspace = true }
 reqwest = { workspace = true }
@@ -18,8 +21,8 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = { workspace = true }
-envy = "0.4"  
-tokio-util ={ workspace = true }
+envy = "0.4"
+tokio-util = { workspace = true }
 
 # Shared crate
 shared = { path = "../shared" }

@@ -3,6 +3,9 @@ name = "shared"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 uuid = { workspace = true }
 serde = { workspace = true }
@@ -10,4 +13,7 @@ serde_json = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
 lz4_flex = "0.13.1"

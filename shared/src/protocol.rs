@@ -4,28 +4,33 @@ use crate::types::{SessionId, Sequence, FileType };
 use std::convert::TryInto;
 
 // u_<session_id>_<seq>.bin
+#[must_use]
 pub fn upstream_filename(session_id: SessionId, seq: Sequence) -> String {
-    format!("u_{}_{}.bin", session_id, seq)
+    format!("u_{session_id}_{seq}.bin")
 }
 
 // d_<session_id>_<seq>.bin
+#[must_use]
 pub fn downstream_filename(session_id: SessionId, seq: Sequence) -> String {
-    format!("d_{}_{}.bin", session_id, seq)
+    format!("d_{session_id}_{seq}.bin")
 }
 
 // conn_<session_id>.bin
+#[must_use]
 pub fn conn_filename(session_id: SessionId) -> String {
-    format!("conn_{}.bin", session_id)
+    format!("conn_{session_id}.bin")
 }
 
 // ack_<session_id>.bin
+#[must_use]
 pub fn ack_filename(session_id: SessionId) -> String {
-    format!("ack_{}.bin", session_id)
+    format!("ack_{session_id}.bin")
 }
 
 // end_<session_id>.bin
+#[must_use]
 pub fn end_filename(session_id: SessionId) -> String {
-    format!("end_{}.bin", session_id)
+    format!("end_{session_id}.bin")
 }
     
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -44,6 +49,10 @@ pub enum ParseFilenameError {
     EmptySegment,
 }
 
+/// Parse a Bale tunnel filename into its components.
+///
+/// # Errors
+/// Returns a `ParseFilenameError` if the name doesn't follow the expected format.
 pub fn parse_filename(name: &str) -> Result<(FileType, SessionId, Option<Sequence>), ParseFilenameError> {
     // delete .bin
     let stem = name.strip_suffix(".bin").ok_or(ParseFilenameError::MissingBinSuffix)?;
@@ -93,7 +102,7 @@ fn parse_data_filename(rest: &str, file_type: FileType) -> Result<(FileType, Ses
 
 // Magic number for chunk header: "BLET" in little-endian ASCII
 // to find out if chunk has head or not in the other side(server-client).
-pub const HEADER_MAGIC: u32 = 0x424C4554;
+pub const HEADER_MAGIC: u32 = 0x424C_4554;
 // Total size of the header in bytes (36 bytes)
 pub const HEADER_SIZE: usize = 36;
 
@@ -119,12 +128,13 @@ pub struct ChunkHeader {
 }
 
 impl ChunkHeader {
+    #[must_use]
     pub fn new(session_id: u128, seq: u32, compressed: bool, data_len: u32, original_len: u32) -> Self {
         Self {
             magic: HEADER_MAGIC,
             session_id,
             seq,
-            flags: if compressed { 1 } else { 0 },
+            flags: u8::from(compressed),
             reserved: [0; 3],
             data_len,
             original_len,
@@ -132,12 +142,14 @@ impl ChunkHeader {
     }
 
     /// Returns true if the payload is compressed (LZ4).
+    #[must_use]
     pub fn is_compressed(&self) -> bool {
         self.flags & 1 != 0
     }
 }
 
 /// Serializes a `ChunkHeader` into a fixed‑size byte array (little‑endian).
+#[must_use]
 pub fn serialize_header(header: &ChunkHeader) -> [u8; HEADER_SIZE] {
     let mut buf = [0u8; HEADER_SIZE];
     buf[0..4].copy_from_slice(&header.magic.to_le_bytes());
@@ -151,13 +163,16 @@ pub fn serialize_header(header: &ChunkHeader) -> [u8; HEADER_SIZE] {
 }
 
 /// Deserializes a byte slice into a `ChunkHeader`.
-/// Returns `None` if the slice is too short or conversion fails.
+/// Returns `None` if the slice is too short, magic doesn't match, or conversion fails.
+#[must_use]
 pub fn deserialize_header(buf: &[u8]) -> Option<ChunkHeader> {
     if buf.len() < HEADER_SIZE {
         return None;
     }
-    // if any of the fields coudn't be converted, function return None.
     let magic = u32::from_le_bytes(buf[0..4].try_into().ok()?);
+    if magic != HEADER_MAGIC {
+        return None; // Not a valid chunk header
+    }
     let session_id = u128::from_le_bytes(buf[4..20].try_into().ok()?);
     let seq = u32::from_le_bytes(buf[20..24].try_into().ok()?);
     let flags = buf[24];

@@ -10,6 +10,8 @@ Designed for environments with restricted internet access – the client speaks 
 - Streaming with dynamic buffering (max chunk size + inactivity flush)
 - Smart LZ4 compression (only when beneficial, skip <1KB and incompressible data)
 - Retry & timeout handling 
+- Typed shared Bot API client (`shared/src/bot_api.rs`) used by both sides
+- Workspace-wide strict Clippy lints and unit tests for the wire protocol
 - Clean shutdown via `Ctrl+C`
 - Works with any Bale bot 
 
@@ -84,10 +86,10 @@ bale-tunnel-stream/
 │   ├── src/                # main.rs, config.rs, socks5_server.rs, session_manager.rs, streamer.rs
 │   └── Cargo.toml
 ├── server/                 # Polling loop + TCP connection to final target
-│   ├── src/                # main.rs, config.rs, session_manager.rs, stream_handler.rs
+│   ├── src/                # main.rs, config.rs, session_manager.rs, streamer.rs
 │   └── Cargo.toml
-├── shared/                 # Common types, filename parsing, compression, header
-│   └── src/                # lib.rs, types.rs, protocol.rs, compression.rs
+├── shared/                 # Common types, Bot API client, filename parsing, compression, chunk header
+│   └── src/                # lib.rs, types.rs, protocol.rs, compression.rs, bot_api.rs
 ├── .env.example
 ├── CHANGELOG.md
 └── README.md
