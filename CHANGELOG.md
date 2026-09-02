@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] – 2026-09-02
+
+### Added
+- **Containerization**: `Dockerfile.server` and `Dockerfile.client` (multi-stage
+  Rust builds) plus a `docker-compose.yml` with `server` / `client` / `both`
+  profiles (`docker compose --profile server up --build`).
+- **One-click Render deployment**: `render.yaml` Blueprint (web service, Docker
+  runtime, free plan) and a *Deploy to Render* button in the README. The server
+  runs in webhook mode on Render; the client (SOCKS5) stays local.
+- Render service guidance: non-secret env vars are pre-set in the Blueprint,
+  secrets (`BALE_SERVER_BOT_TOKEN`, `BALE_CHAT_ID`, `WEBHOOK_BASE_URL`) are
+  filled in during the deploy flow.
+
 ## [1.2.0] – 2026-09-02
 
 ### Added
@@ -12,7 +25,7 @@ All notable changes to this project will be documented in this file.
 - `BotApi::set_webhook` and `BotApi::delete_webhook` methods
   (`shared/src/bot_api.rs`) for registering and removing the webhook with Bale.
 - Server config fields: `WEBHOOK_BASE_URL` (optional), `WEBHOOK_PATH` (default
-  `/webhook`), `SERVER_HTTP_PORT` (default `8080`).
+  `/webhook`), `SERVER_PORT` (default `8080`).
 
 ### Changed
 - Server `main()` now selects between webhook and long-polling mode at startup

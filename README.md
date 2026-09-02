@@ -53,8 +53,8 @@ The **client (SOCKS5 proxy) still runs locally** — see [Running](#running) and
 ## Installation
 
 ```bash
-git clone https://github.com/4mir7z/bale-tunnel.git
-cd bale-tunnel
+git clone https://github.com/bzamr/bale_tunnel.git
+cd bale_tunnel
 # Build both client and server (release)
 cargo build --release --workspace
 ```
@@ -74,9 +74,9 @@ To use webhook mode instead of long polling, set these on the server:
 ```bash
 WEBHOOK_BASE_URL=https://your-server.com:8443  # must be HTTPS, publicly reachable
 WEBHOOK_PATH=/webhook                            # default
-SERVER_HTTP_PORT=8080                             # default
+SERVER_PORT=8080                                  # default (Render sets SERVER_PORT=10000)
 ```
-When `WEBHOOK_BASE_URL` is not set, the server falls back to long polling automatically. For local development, use a tunnel tool like ngrok.
+When `WEBHOOK_BASE_URL` is not set, the server falls back to long polling automatically. For local development, use a tunnel tool like ngrok. For a hosted setup, use the [Deploy to Render](#deploy-the-server-to-render) button — it configures all of this for you.
 
 ## Running
 On the server (outside):
@@ -117,6 +117,10 @@ bale-tunnel-stream/
 │   └── Cargo.toml
 ├── shared/                 # Common types, Bot API client, filename parsing, compression, chunk header
 │   └── src/                # lib.rs, types.rs, protocol.rs, compression.rs, bot_api.rs
+├── Dockerfile.server         # Server container image (multi-stage Rust build)
+├── Dockerfile.client          # Client container image (multi-stage Rust build)
+├── docker-compose.yml         # server / client / both profiles
+├── render.yaml                # Render Blueprint (one-click server deploy)
 ├── .env.example
 ├── CHANGELOG.md
 └── README.md
