@@ -1,0 +1,20 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    env_file: .env
+    ports:
+      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
+    restart: unless-stopped
+    profiles: ["server", "both"]
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "${SOCKS5_EXTERNAL_PORT:-1080}:${SOCKS5_CONTAINER_PORT:-1080}"
+    profiles: ["client", "both"]
