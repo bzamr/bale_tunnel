@@ -1,0 +1,34 @@
+# Render Blueprint for bale_tunnel (server side)
+#
+# One-click deploy: https://render.com/deploy?repo=https://github.com/bzamr/bale_tunnel
+#
+# The client (SOCKS5 proxy) is meant to run locally — only the server is deployed.
+# Secrets marked `sync: false` must be filled in during the Blueprint apply flow:
+#   - BALE_SERVER_BOT_TOKEN : the server bot token from @BotFather on Bale
+#   - BALE_CHAT_ID          : the shared channel ID both bots are in
+#   - WEBHOOK_BASE_URL      : set to https://<service-name>.onrender.com
+#                             (Render assigns the public URL; use the name you give the service)
+
+services:
+  - type: web
+    name: bale-tunnel-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile.server
+    plan: free
+    region: frankfurt
+    autoDeploy: true
+    envVars:
+      - key: SERVER_PORT
+        value: "10000"
+      - key: WEBHOOK_PATH
+        value: /webhook
+      - key: BALE_API_BASE_URL
+        value: https://tapi.bale.ai
+      - key: RUST_LOG
+        value: info,server=debug
+      - key: WEBHOOK_BASE_URL
+        sync: false # https://<your-service-name>.onrender.com
+      - key: BALE_SERVER_BOT_TOKEN
+        sync: false # secret
+      - key: BALE_CHAT_ID
+        sync: false # secret

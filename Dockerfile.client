@@ -1,0 +1,39 @@
+# Stage 1: Build
+FROM rust:1.98-slim AS builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends pkg-config libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Cache dependency resolution: copy manifests first
+COPY Cargo.toml Cargo.lock ./
+COPY shared/Cargo.toml shared/Cargo.toml
+COPY client/Cargo.toml client/Cargo.toml
+COPY server/Cargo.toml server/Cargo.toml
+
+# Create dummy source files so cargo can resolve all workspace members
+RUN mkdir -p shared/src client/src server/src && \
+    echo "pub fn dummy() {}" > shared/src/lib.rs && \
+    echo "fn main() {}" > client/src/main.rs && \
+    echo "fn main() {}" > server/src/main.rs && \
+    cargo build --release --bin client || true
+
+# Copy real source and rebuild (only this layer changes on code edits)
+COPY shared/ shared/
+COPY client/ client/
+COPY server/ server/
+RUN touch shared/src/lib.rs client/src/main.rs server/src/main.rs && \
+    cargo build --release --bin client
+
+# Stage 2: Runtime
+FROM debian:trixie-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/client /usr/local/bin/bale-client
+
+ENTRYPOINT ["bale-client"]
