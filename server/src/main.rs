@@ -7,6 +7,7 @@ use shared::bot_api::BotApi;
 mod config;
 mod session_manager;
 mod streamer;
+mod webhook;
 use config::Config;
 use session_manager::SessionManager;
 
@@ -36,18 +37,56 @@ async fn main() -> Result<()> {
 
     let session_mgr = SessionManager::new(bot_api.clone());
 
-    let polling_task = tokio::spawn(async move {
-        if let Err(e) = run_polling(&config, bot_api, session_mgr).await {
-            error!("Polling task terminated: {e}");
+    // ── Mode selection: webhook vs polling ────────────────────────────
+
+    if let Some(ref base_url) = config.webhook_base_url {
+        let webhook_url = format!("{}{}", base_url.trim_end_matches('/'), config.webhook_path);
+        info!("Webhook mode enabled — registering {webhook_url}");
+
+        bot_api
+            .set_webhook(&webhook_url)
+            .await
+            .context("Failed to register webhook with Bale")?;
+
+        let webhook_api = bot_api.clone();
+        let webhook_task = tokio::spawn(async move {
+            if let Err(e) =
+                webhook::run_server(&config, webhook_api, session_mgr)
+                    .await
+            {
+                error!("Webhook server terminated: {e}");
+            }
+        });
+
+        tokio::signal::ctrl_c()
+            .await
+            .context("Failed to install Ctrl+C handler")?;
+        info!("Shutdown signal received, removing webhook…");
+
+        webhook_task.abort();
+
+        if let Err(e) = bot_api.delete_webhook().await {
+            warn!("Failed to remove webhook on shutdown: {e}");
         }
-    });
 
-    tokio::signal::ctrl_c()
-        .await
-        .context("Failed to install Ctrl+C handler")?;
-    info!("Shutdown signal received, exiting gracefully...");
+        info!("Exiting gracefully…");
+    } else {
+        info!("Long-polling mode enabled (no webhook configured)");
 
-    polling_task.abort();
+        let polling_task = tokio::spawn(async move {
+            if let Err(e) = run_polling(&config, bot_api, session_mgr).await {
+                error!("Polling task terminated: {e}");
+            }
+        });
+
+        tokio::signal::ctrl_c()
+            .await
+            .context("Failed to install Ctrl+C handler")?;
+        info!("Shutdown signal received, exiting gracefully…");
+
+        polling_task.abort();
+    }
+
     Ok(())
 }
 
@@ -137,7 +176,7 @@ async fn run_polling(
     }
 }
 
-async fn process_document(
+pub(crate) async fn process_document(
     bot_api: &BotApi,
     session_mgr: &SessionManager,
     config: &Config,

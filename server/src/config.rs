@@ -20,6 +20,18 @@ pub struct Config {
     /// Inactivity timeout in ms before flushing a partial buffer (default 500 ms).
     #[serde(default = "default_inactivity_timeout_ms")]
     pub inactivity_timeout_ms: u64,
+
+    /// Public URL where Bale should POST webhook updates.
+    /// When set, the server uses webhook mode instead of long polling.
+    pub webhook_base_url: Option<String>,
+
+    /// Path appended to `webhook_base_url` for the webhook endpoint.
+    #[serde(default = "default_webhook_path")]
+    pub webhook_path: String,
+
+    /// Port the axum HTTP server listens on in webhook mode.
+    #[serde(default = "default_server_port")]
+    pub server_port: u16,
 }
 
 fn default_api_base_url() -> String {
@@ -36,6 +48,14 @@ fn default_max_chunk_size() -> usize {
 
 fn default_inactivity_timeout_ms() -> u64 {
     500
+}
+
+fn default_webhook_path() -> String {
+    "/webhook".to_string()
+}
+
+fn default_server_port() -> u16 {
+    8080
 }
 
 impl Config {

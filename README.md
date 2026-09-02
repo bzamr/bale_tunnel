@@ -11,6 +11,7 @@ Designed for environments with restricted internet access – the client speaks 
 - Smart LZ4 compression (only when beneficial, skip <1KB and incompressible data)
 - Retry & timeout handling 
 - Typed shared Bot API client (`shared/src/bot_api.rs`) used by both sides
+- **Webhook mode** for the server — Bale pushes updates directly to an axum HTTP endpoint for lower latency; falls back to long polling when not configured
 - Workspace-wide strict Clippy lints and unit tests for the wire protocol
 - Clean shutdown via `Ctrl+C`
 - Works with any Bale bot 
@@ -19,7 +20,9 @@ Designed for environments with restricted internet access – the client speaks 
 
 Browser → SOCKS5 (client) → (conn_/u_/d_/end_ files) → Bale Bot API
 
-Target Server ← (TCP) ← Server (polling) 
+Target Server ← (TCP) ← Server
+
+Server receives updates either via **webhook** (Bale POSTs to axum) or **long polling** (`getUpdates`), configured by `WEBHOOK_BASE_URL`.
 
 
 ## Prerequisites
@@ -51,6 +54,15 @@ BALE_CHAT_ID
 
 See .env.example for all options.
 
+### Webhook mode (server)
+To use webhook mode instead of long polling, set these on the server:
+```bash
+WEBHOOK_BASE_URL=https://your-server.com:8443  # must be HTTPS, publicly reachable
+WEBHOOK_PATH=/webhook                            # default
+SERVER_HTTP_PORT=8080                             # default
+```
+When `WEBHOOK_BASE_URL` is not set, the server falls back to long polling automatically. For local development, use a tunnel tool like ngrok.
+
 ## Running
 On the server (outside):
 
@@ -63,7 +75,7 @@ On the client (inside):
 ```bash
 cargo run --release -p client
 ```
-Both will start polling the Bale API. Once both are running, you can use the SOCKS5 proxy.
+Both will start polling the Bale API (or, for the server, receiving webhooks if configured). Once both are running, you can use the SOCKS5 proxy.
 
 ## Using the SOCKS5 proxy
 Configure your browser or system to use a SOCKS5 proxy at 127.0.0.1:1080.
@@ -85,8 +97,8 @@ bale-tunnel-stream/
 ├── client/                 # SOCKS5 server + polling loop (receives ack/downstream)
 │   ├── src/                # main.rs, config.rs, socks5_server.rs, session_manager.rs, streamer.rs
 │   └── Cargo.toml
-├── server/                 # Polling loop + TCP connection to final target
-│   ├── src/                # main.rs, config.rs, session_manager.rs, streamer.rs
+├── server/                 # Polling loop / webhook server + TCP connection to final target
+│   ├── src/                # main.rs, config.rs, session_manager.rs, streamer.rs, webhook.rs
 │   └── Cargo.toml
 ├── shared/                 # Common types, Bot API client, filename parsing, compression, chunk header
 │   └── src/                # lib.rs, types.rs, protocol.rs, compression.rs, bot_api.rs

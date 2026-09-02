@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] – 2026-09-02
+
+### Added
+- **Webhook mode for the server** (`server/src/webhook.rs`): when
+  `WEBHOOK_BASE_URL` is set, the server starts an axum HTTP server that receives
+  Bale webhook POSTs instead of long-polling via `getUpdates`. Falls back to
+  polling when the env var is not set.
+- `BotApi::set_webhook` and `BotApi::delete_webhook` methods
+  (`shared/src/bot_api.rs`) for registering and removing the webhook with Bale.
+- Server config fields: `WEBHOOK_BASE_URL` (optional), `WEBHOOK_PATH` (default
+  `/webhook`), `SERVER_HTTP_PORT` (default `8080`).
+
+### Changed
+- Server `main()` now selects between webhook and long-polling mode at startup
+  based on `WEBHOOK_BASE_URL`. The polling path and `process_document` are
+  unchanged.
+- `process_document` visibility widened from private to `pub(crate)` so the
+  webhook handler can call it directly.
+
 ## [1.1.0] – 2026-09-01
 
 ### Added

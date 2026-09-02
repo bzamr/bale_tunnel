@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::multipart::{Form, Part};
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // ── Typed Bale API DTOs ────────────────────────────────────────────────
 
@@ -240,6 +240,68 @@ impl BotApi {
             let text = response.text().await.unwrap_or_default();
             anyhow::bail!("deleteMessage failed: {text}");
         }
+        Ok(())
+    }
+
+    // ── Webhook ────────────────────────────────────────────────────────
+
+    /// Register a webhook URL with Bale. When set, `getUpdates` returns no data.
+    ///
+    /// # Errors
+    /// Returns an error on network failure or non-2xx status.
+    pub async fn set_webhook(&self, url: &str) -> Result<()> {
+        let api_url = format!("{}/bot{}/setWebhook", self.base_url, self.bot_token);
+        let response = self
+            .client
+            .post(&api_url)
+            .json(&serde_json::json!({ "url": url }))
+            .send()
+            .await
+            .context("Failed to call setWebhook")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("setWebhook failed: {status} – {text}");
+        }
+
+        let body: serde_json::Value = response.json().await?;
+        if body["ok"] != serde_json::Value::Bool(true) {
+            anyhow::bail!("setWebhook returned ok=false: {body}");
+        }
+
+        info!("Webhook registered at {url}");
+        Ok(())
+    }
+
+    /// Remove the webhook, re-enabling `getUpdates` polling.
+    ///
+    /// # Errors
+    /// Returns an error on network failure, non-2xx status, or `ok=false`.
+    pub async fn delete_webhook(&self) -> Result<()> {
+        let api_url = format!("{}/bot{}/deleteWebhook", self.base_url, self.bot_token);
+        let response = self
+            .client
+            .post(&api_url)
+            .send()
+            .await
+            .context("Failed to call deleteWebhook")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("deleteWebhook failed: {status} – {text}");
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse deleteWebhook response")?;
+        if body["ok"] != serde_json::Value::Bool(true) {
+            anyhow::bail!("deleteWebhook returned ok=false: {body}");
+        }
+
+        info!("Webhook removed");
         Ok(())
     }
 
