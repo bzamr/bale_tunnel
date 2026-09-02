@@ -64,6 +64,18 @@ impl Config {
     /// # Prerequisites
     /// `dotenvy::dotenv().ok()` should have been called first.
     pub fn from_env() -> Result<Self> {
-        Ok(envy::from_env::<Config>()?)
+        let mut config: Config = envy::from_env()?;
+
+        // On Render, fall back to the auto-injected public URL so a Blueprint
+        // deploy needs no manual webhook URL entry.
+        if config.webhook_base_url.is_none()
+            && let Ok(url) = std::env::var("RENDER_EXTERNAL_URL")
+            && !url.is_empty()
+        {
+            tracing::info!("Using RENDER_EXTERNAL_URL as webhook base: {url}");
+            config.webhook_base_url = Some(url);
+        }
+
+        Ok(config)
     }
 }

@@ -6,8 +6,9 @@
 # Secrets marked `sync: false` must be filled in during the Blueprint apply flow:
 #   - BALE_SERVER_BOT_TOKEN : the server bot token from @BotFather on Bale
 #   - BALE_CHAT_ID          : the shared channel ID both bots are in
-#   - WEBHOOK_BASE_URL      : set to https://<service-name>.onrender.com
-#                             (Render assigns the public URL; use the name you give the service)
+#
+# The webhook URL needs no manual entry: when WEBHOOK_BASE_URL is unset the
+# server falls back to RENDER_EXTERNAL_URL, which Render injects automatically.
 
 services:
   - type: web
@@ -26,8 +27,6 @@ services:
         value: https://tapi.bale.ai
       - key: RUST_LOG
         value: info,server=debug
-      - key: WEBHOOK_BASE_URL
-        sync: false # https://<your-service-name>.onrender.com
       - key: BALE_SERVER_BOT_TOKEN
         sync: false # secret
       - key: BALE_CHAT_ID

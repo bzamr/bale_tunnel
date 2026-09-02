@@ -36,7 +36,8 @@ During the setup you will be asked for three values:
 |---|---|
 | `BALE_SERVER_BOT_TOKEN` | server bot token from [@botfather](https://ble.ir/botfather) |
 | `BALE_CHAT_ID` | shared channel/group ID |
-| `WEBHOOK_BASE_URL` | `https://<your-service-name>.onrender.com` |
+
+No need to enter the webhook URL: when `WEBHOOK_BASE_URL` is unset, the server automatically uses Render's injected `RENDER_EXTERNAL_URL` as the public webhook address.
 
 The **client (SOCKS5 proxy) still runs locally** — see [Running](#running) and [Using the SOCKS5 proxy](#using-the-socks5-proxy).
 

@@ -11,9 +11,9 @@ All notable changes to this project will be documented in this file.
 - **One-click Render deployment**: `render.yaml` Blueprint (web service, Docker
   runtime, free plan) and a *Deploy to Render* button in the README. The server
   runs in webhook mode on Render; the client (SOCKS5) stays local.
-- Render service guidance: non-secret env vars are pre-set in the Blueprint,
-  secrets (`BALE_SERVER_BOT_TOKEN`, `BALE_CHAT_ID`, `WEBHOOK_BASE_URL`) are
-  filled in during the deploy flow.
+- `SERVER` config fallback: when `WEBHOOK_BASE_URL` is unset, the server uses
+  Render's auto-injected `RENDER_EXTERNAL_URL` as the webhook base, so a
+  Blueprint deploy only requires the bot token and chat ID.
 
 ## [1.2.0] – 2026-09-02
 
