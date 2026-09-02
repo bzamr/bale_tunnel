@@ -25,6 +25,21 @@ Target Server ← (TCP) ← Server
 Server receives updates either via **webhook** (Bale POSTs to axum) or **long polling** (`getUpdates`), configured by `WEBHOOK_BASE_URL`.
 
 
+## Deploy the server to Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/bzamr/bale_tunnel)
+
+Clicking the button deploys the **server** using the `render.yaml` Blueprint (free plan, Docker build via `Dockerfile.server`).
+During the setup you will be asked for three values:
+
+| Variable | Value |
+|---|---|
+| `BALE_SERVER_BOT_TOKEN` | server bot token from [@botfather](https://ble.ir/botfather) |
+| `BALE_CHAT_ID` | shared channel/group ID |
+| `WEBHOOK_BASE_URL` | `https://<your-service-name>.onrender.com` |
+
+The **client (SOCKS5 proxy) still runs locally** — see [Running](#running) and [Using the SOCKS5 proxy](#using-the-socks5-proxy).
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (edition 2024)
